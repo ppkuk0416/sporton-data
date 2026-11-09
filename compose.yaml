@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgres@sha256:748a18a54d3842d43bc156f0840d78029b8d349e0feca98c12b9c4ce3404a6b3
+    environment:
+      POSTGRES_USER: sporton_owner
+      POSTGRES_DB: sporton
+      POSTGRES_PASSWORD_FILE: /run/secrets/owner_password
+    secrets: [owner_password]
+    volumes: ["sporton-postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sporton_owner -d sporton"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  initialize:
+    build:
+      context: .
+      secrets: [proxy_ca]
+    command: ["python", "-m", "sporton.db_bootstrap"]
+    environment:
+      SPORTON_OWNER_DATABASE_URL_FILE: /run/secrets/owner_url
+      SPORTON_APP_PASSWORD_FILE: /run/secrets/app_password
+    secrets: [owner_url, app_password]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  dashboard:
+    build:
+      context: .
+      secrets: [proxy_ca]
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      SPORTON_HOME: /data
+      SPORTON_DATABASE_URL_FILE: /run/secrets/app_url
+      SPORTON_ADMIN_TOKEN_FILE: /run/secrets/admin_token
+      SPORTON_PERSISTENCE_CONFIG: /app/config/persistence.container.json
+    secrets: [app_url, admin_token]
+    volumes: ["sporton-data:/data", "sporton-backups:/backups:ro"]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  briefing:
+    build:
+      context: .
+      secrets: [proxy_ca]
+    profiles: ["briefing"]
+    command: ["sporton", "briefing-daemon", "--inbox", "/data/inbox", "--retrain"]
+    environment:
+      SPORTON_HOME: /data
+      SPORTON_DATABASE_URL_FILE: /run/secrets/app_url
+      SPORTON_PERSISTENCE_CONFIG: /app/config/persistence.container.json
+    secrets: [app_url]
+    volumes: ["sporton-data:/data"]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  persistence:
+    build:
+      context: .
+      secrets: [proxy_ca]
+    command: ["sporton", "persistence-worker"]
+    environment:
+      SPORTON_HOME: /data
+      SPORTON_DATABASE_URL_FILE: /run/secrets/owner_url
+      SPORTON_PERSISTENCE_CONFIG: /app/config/persistence.container.json
+    secrets: [owner_url, backup_key]
+    volumes: ["sporton-data:/data:ro", "sporton-backups:/backups"]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    restart: unless-stopped
+volumes:
+  sporton-data:
+  sporton-postgres:
+  sporton-backups:
+secrets:
+  proxy_ca:
+    file: ${SPORTON_BUILD_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
+  owner_password:
+    file: ${SPORTON_PG_OWNER_PASSWORD_FILE:-./var/persistence-dev/owner.password}
+  app_password:
+    file: ${SPORTON_PG_APP_PASSWORD_FILE:-./var/persistence-dev/app.password}
+  owner_url:
+    file: ${SPORTON_OWNER_DATABASE_URL_FILE:-./var/persistence-dev/compose-owner.url}
+  app_url:
+    file: ${SPORTON_DATABASE_URL_FILE:-./var/persistence-dev/compose-app.url}
+  backup_key:
+    file: ${SPORTON_BACKUP_KEY_FILE:-./var/persistence-dev/backup.key}
+  admin_token:
+    file: ${SPORTON_ADMIN_TOKEN_FILE:-./var/persistence-dev/admin.token}

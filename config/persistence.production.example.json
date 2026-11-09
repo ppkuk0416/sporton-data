@@ -1,0 +1,11 @@
+{
+  "environment": "production",
+  "backup_root": "/backup-storage/sporton",
+  "key_file": "/run/secrets/sporton_backup_key",
+  "interval_minutes": 60,
+  "retention_days": 90,
+  "rpo_minutes": 60,
+  "rto_seconds": 900,
+  "pg_tools_prefix": [],
+  "wal_staging": null
+}

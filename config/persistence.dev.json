@@ -1,0 +1,11 @@
+{
+  "environment": "development",
+  "backup_root": "var/encrypted-backups",
+  "key_file": "var/persistence-dev/backup.key",
+  "interval_minutes": 60,
+  "retention_days": 30,
+  "rpo_minutes": 60,
+  "rto_seconds": 300,
+  "pg_tools_prefix": ["docker", "--host=unix:///var/run/docker.sock", "exec", "--user", "postgres", "sporton-pgdev"],
+  "wal_staging": "var/postgres/wal-archive"
+}

@@ -1,0 +1,11 @@
+{
+  "environment": "development",
+  "backup_root": "/backups",
+  "key_file": "/run/secrets/backup_key",
+  "interval_minutes": 60,
+  "retention_days": 30,
+  "rpo_minutes": 60,
+  "rto_seconds": 300,
+  "pg_tools_prefix": [],
+  "wal_staging": null
+}

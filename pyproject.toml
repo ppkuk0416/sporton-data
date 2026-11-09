@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sporton"
+version = "0.3.0"
+description = "Auditable, point-in-time multi-sport research platform"
+requires-python = ">=3.12"
+dependencies = [
+ "fastapi==0.121.1", "uvicorn==0.38.0", "pydantic==2.12.4",
+ "sqlalchemy==2.0.44", "pandas==2.3.3", "numpy==2.3.4",
+ "scikit-learn==1.7.2", "lightgbm==4.6.0", "httpx==0.28.1", "joblib==1.5.2", "scipy==1.18.1", "psycopg[binary]==3.2.12", "duckdb==1.4.1", "pyarrow==22.0.0", "cryptography==46.0.3"
+]
+[project.optional-dependencies]
+test = ["pytest==9.0.0"]
+[project.scripts]
+sporton = "sporton.cli:main"
+[tool.setuptools.package-data]
+sporton = ["dashboard.html", "admin.html"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+[tool.setuptools.packages.find]
+include = ["sporton*"]

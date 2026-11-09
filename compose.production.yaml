@@ -1,0 +1,44 @@
+# Separate deployment using an externally managed PostgreSQL service and backup mount.
+# URLs require sslmode=verify-full. Supply secrets as files; never commit their contents.
+services:
+  dashboard:
+    build:
+      context: .
+      secrets: [proxy_ca]
+    environment:
+      SPORTON_ENV: production
+      SPORTON_HOME: /data
+      SPORTON_DATABASE_URL_FILE: /run/secrets/app_url
+      SPORTON_ADMIN_TOKEN_FILE: /run/secrets/admin_token
+      SPORTON_PERSISTENCE_CONFIG: /app/config/persistence.production.example.json
+    secrets: [app_url, admin_token]
+    volumes: ["${SPORTON_DATA_MOUNT:?Set persistent data mount}:/data", "${SPORTON_BACKUP_MOUNT:?Set independent backup mount}:/backup-storage:ro"]
+    ports: ["127.0.0.1:8000:8000"]
+    restart: unless-stopped
+  persistence:
+    build:
+      context: .
+      secrets: [proxy_ca]
+    command: ["sporton", "persistence-worker"]
+    environment:
+      SPORTON_ENV: production
+      SPORTON_HOME: /data
+      SPORTON_DATABASE_URL_FILE: /run/secrets/owner_url
+      SPORTON_PERSISTENCE_CONFIG: /app/config/persistence.production.example.json
+    secrets:
+      - owner_url
+      - source: backup_key
+        target: sporton_backup_key
+    volumes: ["${SPORTON_DATA_MOUNT:?Set persistent data mount}:/data:ro", "${SPORTON_BACKUP_MOUNT:?Set independent backup mount}:/backup-storage"]
+    restart: unless-stopped
+secrets:
+  proxy_ca:
+    file: ${SPORTON_BUILD_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
+  app_url:
+    file: ${SPORTON_DATABASE_URL_FILE:?Set app PostgreSQL URL file}
+  owner_url:
+    file: ${SPORTON_OWNER_DATABASE_URL_FILE:?Set backup/restore PostgreSQL URL file}
+  backup_key:
+    file: ${SPORTON_BACKUP_KEY_FILE:?Set AES-256 key file}
+  admin_token:
+    file: ${SPORTON_ADMIN_TOKEN_FILE:?Set admin token file}
