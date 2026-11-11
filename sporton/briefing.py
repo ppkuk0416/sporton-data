@@ -292,6 +292,8 @@ def run_due(store,test_mode=False,inbox=None):
     if existing:
         if existing['data_mode']!=('TEST/FIXTURE' if test_mode else 'real'):raise ValueError('briefing data mode mismatch')
         ensure_backup(store,existing)
+        from .telegram import deliver
+        deliver(store,existing)
         return None
     previous=[r['payload'] for r in store.rows('briefings') if not r['id'].startswith('manual-')]
     missed=[]
@@ -302,6 +304,8 @@ def run_due(store,test_mode=False,inbox=None):
             missed.append(iso(cursor));cursor=next_slot(cursor)
     result=create_briefing(store,due,test_mode,True,inbox)
     ensure_backup(store,result)
+    from .telegram import deliver
+    deliver(store,result)
     if missed:store.append('briefing_events','missed:'+key,{'at':iso(utcnow()),'action':'missed_slots','slots':missed,'catch_up_briefing_id':key})
     return result
 

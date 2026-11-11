@@ -14,6 +14,8 @@ def main():
     parser=argparse.ArgumentParser(description='Sporton multi-sport research. Test fixtures must use a separate SPORTON_HOME/database.')
     sub=parser.add_subparsers(dest='command',required=True)
     sub.add_parser('init')
+    sub.add_parser('telegram-setup')
+    sub.add_parser('telegram-test')
     p=sub.add_parser('secure-backup');p.add_argument('--policy')
     p=sub.add_parser('restore-test');p.add_argument('backup_id');p.add_argument('--policy')
     p=sub.add_parser('persistence-worker');p.add_argument('--policy');p.add_argument('--once',action='store_true')
@@ -45,6 +47,9 @@ def main():
     args=parser.parse_args(); store=Store(initialize=args.command=='init' or None); result=None
     try:
         if args.command=='init': result={'status':'initialized','database':store.engine.dialect.name}
+        elif args.command in ('telegram-setup','telegram-test'):
+            from .telegram import setup,send_test
+            result=setup() if args.command=='telegram-setup' else send_test()
         elif args.command in ('secure-backup','restore-test','persistence-worker'):
             from .durability import Policy,create_backup,restore_test,periodic,archive_wal,retention
             policy=Policy.load(args.policy)

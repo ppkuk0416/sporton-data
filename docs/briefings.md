@@ -50,3 +50,10 @@ DB `briefings`, `briefing_notes`, `briefing_events`는 기존 append-only·SHA25
 Docker 설정은 `docker compose --profile briefing up --build dashboard briefing`로 제공한다. `restart: unless-stopped`이지만 **상시 켜진 호스트**가 필요하고, 현재 클라우드 세션의 종료 이후 실행을 보장하지 않는다. 컨테이너 빌드는 아직 검증하지 않았다. 환경 start_skill에 API와 briefing daemon을 다시 시작하는 절차를 등록한다. 설정 초안 저장·환경 게시·새 태스크 복원은 서로 별개다.
 
 실제 일정/결과/시장 공급자가 연결되지 않았고 실제 경기 자료도 아직 없다. 정규화 CSV inbox와 별도로 공개 라이선스를 확인한 NBA/EPL 아카이브를 직접 주기 수집한다. 아카이브와 연구 결과는 verified 경기·실전 성능과 분리해 브리핑에 표시한다. KBL 공식 페이지는 아직 접근 차단 상태이며 일정/결과 추출기는 검증되지 않았다. 일정이 비어 있다고 실제 경기가 없다는 뜻이 아니다. 다음 시각의 브리핑 본문은 그 시점의 DB와 수집 상태에 따라 생성되며 지금 미리 만든 스포츠 예측을 예약해 게시하지 않는다.
+
+## Telegram 추가 연결
+
+선택적 [Telegram 설정과 테스트](telegram.md)를 추가했다. 설정한 경우 daemon이
+브리핑 Markdown 원본을 문서로 전송하고 성공·실패·재시도 이력을 보관한다.
+토큰 미등록 환경은 기존 대시보드 경로만 사용한다. 이 채팅으로의 알림은 여전히
+연결하지 않는다. 상시 서버와 06:30 완료 마감 운영은 별도 작업이다.

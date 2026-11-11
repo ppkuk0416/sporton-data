@@ -1,0 +1,58 @@
+name: NBA daily Telegram
+on:
+  schedule:
+    # KST 06:00 primary; 06:15/06:25 retries; 06:35 late recovery.
+    - cron: '0,15,25,35 21 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nba-daily-telegram
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SPORTON_HOME: var/dispatch
+      SPORTON_TELEGRAM_BOT_TOKEN: ${{ secrets.SPORTON_TELEGRAM_BOT_TOKEN }}
+      SPORTON_TELEGRAM_CHAT_ID: ${{ secrets.SPORTON_TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Check required settings without exposing values
+        run: |
+          test -n "$SPORTON_TELEGRAM_BOT_TOKEN" || { echo 'Missing SPORTON_TELEGRAM_BOT_TOKEN repository secret'; exit 1; }
+          test -n "$SPORTON_TELEGRAM_CHAT_ID" || { echo 'Missing SPORTON_TELEGRAM_CHAT_ID repository secret'; exit 1; }
+      - name: Restore latest append-only state and delivery receipts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p var/dispatch
+          for previous_run in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow nba-daily.yaml --branch main --status completed --limit 30 --json databaseId,event --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | .databaseId'); do
+            artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$previous_run/artifacts" --jq '.artifacts[] | select(.name == "nba-dispatch-state" and .expired == false) | .id')
+            if [ -n "$artifact_id" ]; then
+              gh run download "$previous_run" --repo "$GITHUB_REPOSITORY" --name nba-dispatch-state --dir var/dispatch
+              break
+            fi
+          done
+      - name: Install pinned runtime
+        run: |
+          pip install -r requirements.lock
+          pip install --no-deps --no-build-isolation -e .
+      - name: Collect, analyze, archive, send
+        run: python -m sporton.dispatch
+      - name: Preserve raw evidence, original reports and delivery receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nba-dispatch-state
+          path: |
+            var/dispatch/sporton.db*
+            var/dispatch/daily-reports/
+          retention-days: 90
+          if-no-files-found: warn

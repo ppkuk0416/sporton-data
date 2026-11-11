@@ -173,3 +173,10 @@ sporton serve
 [개발 시작·DB·정정·관리자 안내](docs/persistence.md) · [백업/복구·RPO/RTO·운영 한계](docs/backup-recovery.md)
 
 현재 PostgreSQL·백업은 로컬 개발 호스트에서 검증했습니다. 외부 운영 DB/독립 원격 백업과 PITR은 아직 검증되지 않았습니다. 기존 SQLite는 보존돼 있으며 단순 `sporton serve`는 개발 호환 경로입니다. PostgreSQL로 실행하려면 문서의 `tools/runtime.py` 또는 secret URL file을 사용합니다. 라이브 NBA 분석 완성을 의미하지 않습니다.
+
+## 매일 NBA Telegram 자동 실행
+
+[자동 수집·보고서·예약·복구 운영 절차](docs/automatic-nba.md).
+현재 환경용 시작은 `.venv/bin/python tools/start_nba_dispatch.py`, 채팅과 독립적인
+예약 정의는 `.github/workflows/nba-daily.yaml`이다. GitHub에 토큰·수신 채팅 ID 비밀을
+등록하고 실제 Actions 실행을 확인해야 외부 자동 발송 활성화가 완료된다.
