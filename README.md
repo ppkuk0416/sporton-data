@@ -180,3 +180,6 @@ sporton serve
 현재 환경용 시작은 `.venv/bin/python tools/start_nba_dispatch.py`, 채팅과 독립적인
 예약 정의는 `.github/workflows/nba-daily.yaml`이다. GitHub에 토큰·수신 채팅 ID 비밀을
 등록하고 실제 Actions 실행을 확인해야 외부 자동 발송 활성화가 완료된다.
+
+
+NBA 자동 경로 v2: [긴급 품질 수정 및 검증 보고](docs/nba-quality-repair.md). 실제 공식 일정/최근 이력 복구, 파생 효율, 독립 규칙 심사·감사·작업 상태, 회고 3시즌 비교를 구분해 기록한다. 전문가 LLM 심사·검증 운영 모델·외부 PostgreSQL은 미완료다.

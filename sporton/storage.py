@@ -11,7 +11,7 @@ ENTITIES = '''sports leagues teams players seasons fixtures lineups injuries tea
 player_statistics historical_game_results historical_market_odds market_snapshots feature_snapshots
 model_versions model_predictions analyst_reports critical_reviews official_recommendations
 actual_results prediction_evaluations error_memory training_runs model_promotions
-raw_data source_failures review_evidence briefings briefing_notes briefing_events data_sources source_collections archive_datasets record_revisions validation_events source_observations identity_aliases professional_reports market_selections forecast_components settlement_events backup_runs restore_tests lake_exports access_events schema_versions'''.split()
+raw_data source_failures review_evidence briefings briefing_notes briefing_events data_sources source_collections archive_datasets record_revisions validation_events source_observations identity_aliases professional_reports market_selections forecast_components settlement_events backup_runs restore_tests lake_exports access_events schema_versions job_executions data_quality_logs learning_feedback'''.split()
 
 
 def canonical(payload):
@@ -52,6 +52,8 @@ class Store:
                 if self.engine.dialect.name == 'sqlite':
                     for operation in ('UPDATE', 'DELETE'):
                         conn.execute(text(f"CREATE TRIGGER IF NOT EXISTS immutable_{name}_{operation} BEFORE {operation} ON {name} BEGIN SELECT RAISE(ABORT, 'append-only'); END"))
+            if self.engine.dialect.name=='sqlite':
+                conn.execute(text("CREATE INDEX IF NOT EXISTS raw_source_lookup ON raw_data(json_extract(payload, '$.source_url'), created_at)"))
             from .schema import initialize,TYPED_TABLES
             initialize(conn)
             if self.engine.dialect.name == 'sqlite':
@@ -109,3 +111,11 @@ class Store:
             if digest(p)!=row['sha256']:raise ValueError('integrity hash mismatch')
             out.append({'id':row['id'],'created_at':row['created_at'],'payload':p})
         return out
+
+
+    def latest_source(self,url):
+        """Find one source snapshot without decoding the entire historical archive."""
+        expression="json_extract(payload, '$.source_url')" if self.engine.dialect.name=='sqlite' else "CAST(payload AS jsonb)->>'source_url'"
+        with self.engine.connect() as conn:
+            row=conn.execute(text('SELECT id FROM raw_data WHERE '+expression+'=:url ORDER BY created_at DESC,id DESC LIMIT 1'),{'url':url}).first()
+            return {'id':row[0],'payload':self.get('raw_data',row[0],conn=conn)} if row else None

@@ -1,8 +1,9 @@
 name: NBA daily Telegram
 on:
   schedule:
-    # KST 06:00 primary; 06:15/06:25 retries; 06:35 late recovery.
-    - cron: '0,15,25,35 21 * * *'
+    # KST 06:30 primary; 06:40/06:50/07:00 explicit late recovery.
+    - cron: '30,40,50 21 * * *'
+    - cron: '0 22 * * *'
   workflow_dispatch:
 permissions:
   contents: read

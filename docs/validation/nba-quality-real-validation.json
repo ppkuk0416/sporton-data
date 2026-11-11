@@ -1,0 +1,93 @@
+{
+  "nov11_regression": {
+    "date_kst": "2026-11-11",
+    "games": 6,
+    "schedule_verified": 6,
+    "history_team_count": 12,
+    "efficiency_team_count": 12,
+    "pre_game_predictions": 0,
+    "issues": []
+  },
+  "manual_pipeline": {
+    "reports": 1,
+    "games": 10,
+    "schedule_verified": 10,
+    "histories": 20,
+    "efficiency_teams": 20,
+    "models": [
+      "efficiency-possession-baseline-v1"
+    ],
+    "review_pass": 10,
+    "predictions_saved": 10,
+    "state": "COMPLETED_PARTIAL"
+  },
+  "sqlite_restore": {
+    "status": "RESTORE_VERIFIED",
+    "tables_verified": 56,
+    "prediction_records": 10,
+    "backup_id": "142380c2-3e1a-46d1-9d21-07d1f9826b35"
+  },
+  "postgres_migration": {
+    "verified": true,
+    "source_engine": "sqlite",
+    "target_engine": "postgresql",
+    "counts": {
+      "sports": 0,
+      "leagues": 0,
+      "teams": 0,
+      "players": 0,
+      "seasons": 0,
+      "fixtures": 15,
+      "lineups": 0,
+      "injuries": 0,
+      "team_statistics": 250,
+      "player_statistics": 0,
+      "historical_game_results": 0,
+      "historical_market_odds": 0,
+      "market_snapshots": 0,
+      "feature_snapshots": 32,
+      "model_versions": 0,
+      "model_predictions": 0,
+      "analyst_reports": 0,
+      "critical_reviews": 32,
+      "official_recommendations": 0,
+      "actual_results": 0,
+      "prediction_evaluations": 0,
+      "error_memory": 0,
+      "training_runs": 4,
+      "model_promotions": 0,
+      "raw_data": 381,
+      "source_failures": 6,
+      "review_evidence": 32,
+      "briefings": 1,
+      "briefing_notes": 2,
+      "briefing_events": 7,
+      "data_sources": 0,
+      "source_collections": 0,
+      "archive_datasets": 0,
+      "record_revisions": 0,
+      "validation_events": 14,
+      "source_observations": 14,
+      "identity_aliases": 16,
+      "professional_reports": 4,
+      "market_selections": 0,
+      "forecast_components": 10,
+      "settlement_events": 0,
+      "backup_runs": 2,
+      "restore_tests": 2,
+      "lake_exports": 0,
+      "access_events": 0,
+      "schema_versions": 0,
+      "job_executions": 20,
+      "data_quality_logs": 32,
+      "learning_feedback": 0
+    }
+  },
+  "postgres_restore": {
+    "status": "RESTORE_VERIFIED",
+    "tables_verified": 56,
+    "schema_objects_verified": 134,
+    "database_engine": "postgresql",
+    "backup_id": "cf61729e-20e3-469b-8cd5-95693711d323"
+  }
+}

@@ -107,9 +107,14 @@ def record_observation(store,payload):
     if o.fixture_id:
         fixture=store.get('fixtures',o.fixture_id)
         if not fixture or fixture['league']!=o.league or fixture['season']!=o.season:raise ValueError('observation fixture/league/season mismatch')
-    p=o.model_dump(mode='json');key=digest([o.source,o.source_record_id,o.data_version,o.league,o.entity_id,o.field,o.effective_at.isoformat(),digest(o.value)])
+    p=o.model_dump(mode='json');key=digest([o.source,o.source_record_id,o.data_version,o.league,o.season,o.fixture_id,o.entity_id,o.field,o.effective_at.isoformat(),digest(o.value)])
+    # Reuse matching pre-v2 IDs without rewriting immutable historical rows.
+    legacy_key=digest([o.source,o.source_record_id,o.data_version,o.league,o.entity_id,o.field,o.effective_at.isoformat(),digest(o.value)])
     existing=store.get('source_observations',key)
-    if existing:return key,observation_state(store,o.league,o.entity_id,o.field,o.effective_at)
+    if not existing:
+        legacy=store.get('source_observations',legacy_key)
+        if legacy and all(legacy.get(k)==v for k,v in p.items()):key,existing=legacy_key,legacy
+    if existing:return key,observation_state(store,o.league,o.entity_id,o.field,o.effective_at,season=o.season,fixture_id=o.fixture_id)
     archived=[r['payload'] for r in store.rows('archive_datasets') if r['payload'].get('raw',{}).get('sha256')==o.raw_sha256 and r['payload'].get('source_url')==o.source_url]
     raw_verified=False
     if archived:
@@ -124,20 +129,41 @@ def record_observation(store,payload):
         conn.execute(observation_index.insert().values(id=key,league=o.league,entity_id=o.entity_id,field=o.field,source=o.source,
             source_url=o.source_url,collected_at=o.collected_at,published_at=o.published_at,status=status,
             validator=p['validator'],fixture_id=o.fixture_id,value_hash=digest(o.value)))
-    state=observation_state(store,o.league,o.entity_id,o.field,o.effective_at)
+    state=observation_state(store,o.league,o.entity_id,o.field,o.effective_at,season=o.season,fixture_id=o.fixture_id)
     store.append('validation_events',str(uuid4()),{'observation_id':key,'status':state['status'],'evidence_ids':state['evidence_ids'],'at':utcnow().isoformat(),'validator':p['validator']})
     return key,state
 
 
-def observation_state(store,league,entity_id,field,effective_at):
-    at=effective_at.isoformat() if isinstance(effective_at,datetime) else effective_at
-    rows=[r for r in store.rows('source_observations') if all(r['payload'][k]==v for k,v in [('league',league),('entity_id',entity_id),('field',field)]) and datetime.fromisoformat(r['payload']['effective_at'])==datetime.fromisoformat(at)]
+_ANY_FIXTURE=object()
+
+
+def observations_as_of(store,league,entity_id,field,*,as_of=None,season=None,fixture_id=_ANY_FIXTURE):
+    """Only evidence already recorded, collected, and published at the cutoff."""
+    cutoff=aware(as_of) if as_of is not None else None
+    rows=[]
+    for row in store.rows('source_observations'):
+        p=row['payload']
+        if (p['league'],p['entity_id'],p['field'])!=(league,entity_id,field):continue
+        if season is not None and p['season']!=season:continue
+        if fixture_id is not _ANY_FIXTURE and p.get('fixture_id')!=fixture_id:continue
+        if cutoff is not None:
+            clocks=[row['created_at'],p['collected_at'],p['effective_at']]
+            if p.get('published_at'):clocks.append(p['published_at'])
+            if any(datetime.fromisoformat(t)>cutoff for t in clocks):continue
+        rows.append(row)
+    return rows
+
+
+def observation_state(store,league,entity_id,field,effective_at,*,as_of=None,season=None,fixture_id=_ANY_FIXTURE):
+    at=effective_at if isinstance(effective_at,datetime) else datetime.fromisoformat(effective_at)
+    rows=[r for r in observations_as_of(store,league,entity_id,field,as_of=as_of,season=season,fixture_id=fixture_id)
+        if datetime.fromisoformat(r['payload']['effective_at'])==at]
     values={digest(r['payload']['value']) for r in rows if r['payload']['value'] is not None}
     if len(values)>1:status='CONFLICTED'
     elif not values:status='MISSING'
     elif all(r['payload']['status']=='TEST/FIXTURE' for r in rows):status='TEST/FIXTURE'
     else:status='VERIFIED' if any(r['payload']['status']=='VERIFIED' for r in rows) else 'UNVERIFIED'
-    return {'status':status,'evidence_ids':[r['id'] for r in rows],'validator':'cross-source-value-v1'}
+    return {'status':status,'evidence_ids':[r['id'] for r in rows],'validator':'cross-source-value-v2'}
 
 
 RATIOS={'three_par':1.,'oreb_pct':1.,'dreb_pct':1.,'tov_pct':1.,'usage_pct':1.,'efg_pct':1.5,'ts_pct':1.5,'hard_hit_pct':1.}
@@ -215,11 +241,12 @@ def availability_verified(store,report):
     cutoff=datetime.fromisoformat(report['snapshot']['feature_cutoff_timestamp']);fixture=report['fixture']
     for entity in (fixture['home_team'],fixture['away_team']):
         for field in ('confirmed_lineup','player_availability'):
-            candidates=[r['payload'] for r in store.rows('source_observations') if r['payload'].get('fixture_id')==fixture['game_id']
-                and r['payload']['entity_id']==entity and r['payload']['field']==field and r['payload']['status']=='VERIFIED'
-                and datetime.fromisoformat(r['payload']['collected_at'])<=cutoff and r['payload'].get('published_at')
-                and datetime.fromisoformat(r['payload']['published_at'])<=cutoff]
+            candidates=observations_as_of(store,fixture['league'],entity,field,as_of=cutoff,
+                season=fixture['season'],fixture_id=fixture['game_id'])
             if not candidates:return False
-            latest=max(candidates,key=lambda r:r['published_at'])
-            if observation_state(store,fixture['league'],entity,field,latest['effective_at'])['status']!='VERIFIED':return False
+            latest=max(candidates,key=lambda r:(datetime.fromisoformat(r['payload']['collected_at']),
+                datetime.fromisoformat(r['created_at']),r['id']))['payload']
+            if latest['status']!='VERIFIED' or not latest.get('published_at'):return False
+            if observation_state(store,fixture['league'],entity,field,latest['effective_at'],as_of=cutoff,
+                season=fixture['season'],fixture_id=fixture['game_id'])['status']!='VERIFIED':return False
     return True

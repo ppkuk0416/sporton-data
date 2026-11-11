@@ -34,15 +34,17 @@ def admin_status():
             row=c.execute(text('SELECT archived_count,failed_count,last_archived_time,last_failed_time FROM pg_stat_archiver')).mappings().first()
             pg={k:v.isoformat() if hasattr(v,'isoformat') else v for k,v in row.items()}
     reports=s.rows('professional_reports');reviews=s.rows('critical_reviews');observations=s.rows('source_observations')
-    groups={(r['payload']['league'],r['payload']['entity_id'],r['payload']['field'],r['payload']['effective_at']) for r in observations}
+    groups={(r['payload']['league'],r['payload']['entity_id'],r['payload']['field'],r['payload']['effective_at'],r['payload']['season'],r['payload'].get('fixture_id') or '') for r in observations}
     issues=[]
-    for league,entity,field,at in sorted(groups):
-        state=observation_state(s,league,entity,field,at)
-        if state['status']!='VERIFIED':issues.append({'league':league,'entity_id':entity,'field':field,'effective_at':at,**state})
+    for league,entity,field,at,season,fixture_id in sorted(groups):
+        state=observation_state(s,league,entity,field,at,season=season,fixture_id=fixture_id or None)
+        if state['status']!='VERIFIED':issues.append({'league':league,'season':season,'fixture_id':fixture_id or None,'entity_id':entity,'field':field,'effective_at':at,**state})
     try:backups=status(s)
     except Exception as exc:backups={'configuration_error':str(exc),'rpo_warning':True,'latest_backup_restore_verified':False}
     from .analytics import performance
     return {'database_engine':s.engine.dialect.name,'counts':counts,'data_issues':issues,
+        'job_executions':s.rows('job_executions')[-100:],'data_quality_logs':s.rows('data_quality_logs')[-100:],
+        'learning_feedback':s.rows('learning_feedback')[-50:],
         'validation_events':s.rows('validation_events')[-100:],'corrections':s.rows('record_revisions')[-100:],
         'reports':[{'id':r['id'],'kind':r['payload']['kind'],'created_at':r['created_at'],'fixture_id':r['payload']['fixture_id'],'data_mode':r['payload']['data_mode']} for r in reports],
         'review_counts':{'PASS':sum(r['payload']['verdict']=='PASS' for r in reviews),'NO':sum(r['payload']['verdict']=='NO' for r in reviews)},
@@ -65,4 +67,10 @@ def trace_report(report_id:str):
         'original_evaluation':s.get('prediction_evaluations',pid) if pid else None,
         'correction_evaluations':[x for x in s.rows('settlement_events') if x['payload'].get('prediction_id')==pid],
         'error_hypotheses':[x for x in s.rows('error_memory') if x['payload'].get('prediction_id')==pid],
+        'research_lineage':[{'analysis':g,'features':s.get('feature_snapshots',g['feature_snapshot_id']) if g.get('feature_snapshot_id') else None,
+            'prediction':s.get('forecast_components',g['prediction_id']) if g.get('prediction_id') else None,
+            'review':s.get('critical_reviews','review:'+g['prediction_id']) if g.get('prediction_id') else None,
+            'market':s.get('historical_market_odds',g['market_snapshot_id']) if g.get('market_snapshot_id') else None,
+            'audit':s.get('settlement_events','daily-audit:'+g['prediction_id']) if g.get('prediction_id') else None}
+            for g in r.get('content',{}).get('games',[])],
         'revisions':[x for x in s.rows('record_revisions') if x['payload']['target_id'] in (fid,pid)]}

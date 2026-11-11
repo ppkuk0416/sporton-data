@@ -1,0 +1,390 @@
+{
+  "source_url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=20261110",
+  "recorded_real_response_date": "2026-11-11",
+  "events": [
+    {
+      "id": "401909960",
+      "date": "2026-11-11T00:30Z",
+      "name": "Milwaukee Bucks at New York Knicks",
+      "season": {
+        "year": 2027,
+        "type": 2,
+        "slug": "regular-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 4,
+        "type": {
+          "id": "3",
+          "name": "STATUS_FINAL",
+          "state": "post",
+          "completed": true,
+          "description": "Final",
+          "detail": "Final",
+          "shortDetail": "Final"
+        }
+      },
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "id": "18",
+              "homeAway": "home",
+              "score": "117",
+              "team": {
+                "id": "18",
+                "abbreviation": "NY",
+                "displayName": "New York Knicks"
+              }
+            },
+            {
+              "id": "15",
+              "homeAway": "away",
+              "score": "85",
+              "team": {
+                "id": "15",
+                "abbreviation": "MIL",
+                "displayName": "Milwaukee Bucks"
+              }
+            }
+          ],
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 4,
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "401909961",
+      "date": "2026-11-11T01:00Z",
+      "name": "Boston Celtics at Philadelphia 76ers",
+      "season": {
+        "year": 2027,
+        "type": 2,
+        "slug": "regular-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 4,
+        "type": {
+          "id": "3",
+          "name": "STATUS_FINAL",
+          "state": "post",
+          "completed": true,
+          "description": "Final",
+          "detail": "Final",
+          "shortDetail": "Final"
+        }
+      },
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "id": "20",
+              "homeAway": "home",
+              "score": "101",
+              "team": {
+                "id": "20",
+                "abbreviation": "PHI",
+                "displayName": "Philadelphia 76ers"
+              }
+            },
+            {
+              "id": "2",
+              "homeAway": "away",
+              "score": "123",
+              "team": {
+                "id": "2",
+                "abbreviation": "BOS",
+                "displayName": "Boston Celtics"
+              }
+            }
+          ],
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 4,
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "401909962",
+      "date": "2026-11-11T02:00Z",
+      "name": "LA Clippers at Phoenix Suns",
+      "season": {
+        "year": 2027,
+        "type": 2,
+        "slug": "regular-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 4,
+        "type": {
+          "id": "3",
+          "name": "STATUS_FINAL",
+          "state": "post",
+          "completed": true,
+          "description": "Final",
+          "detail": "Final",
+          "shortDetail": "Final"
+        }
+      },
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "id": "21",
+              "homeAway": "home",
+              "score": "133",
+              "team": {
+                "id": "21",
+                "abbreviation": "PHX",
+                "displayName": "Phoenix Suns"
+              }
+            },
+            {
+              "id": "12",
+              "homeAway": "away",
+              "score": "110",
+              "team": {
+                "id": "12",
+                "abbreviation": "LAC",
+                "displayName": "LA Clippers"
+              }
+            }
+          ],
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 4,
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "401909963",
+      "date": "2026-11-11T02:00Z",
+      "name": "Miami Heat at Utah Jazz",
+      "season": {
+        "year": 2027,
+        "type": 2,
+        "slug": "regular-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 4,
+        "type": {
+          "id": "3",
+          "name": "STATUS_FINAL",
+          "state": "post",
+          "completed": true,
+          "description": "Final",
+          "detail": "Final",
+          "shortDetail": "Final"
+        }
+      },
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "id": "26",
+              "homeAway": "home",
+              "score": "109",
+              "team": {
+                "id": "26",
+                "abbreviation": "UTAH",
+                "displayName": "Utah Jazz"
+              }
+            },
+            {
+              "id": "14",
+              "homeAway": "away",
+              "score": "115",
+              "team": {
+                "id": "14",
+                "abbreviation": "MIA",
+                "displayName": "Miami Heat"
+              }
+            }
+          ],
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 4,
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "401909964",
+      "date": "2026-11-11T03:00Z",
+      "name": "Orlando Magic at Sacramento Kings",
+      "season": {
+        "year": 2027,
+        "type": 2,
+        "slug": "regular-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 4,
+        "type": {
+          "id": "3",
+          "name": "STATUS_FINAL",
+          "state": "post",
+          "completed": true,
+          "description": "Final",
+          "detail": "Final",
+          "shortDetail": "Final"
+        }
+      },
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "id": "23",
+              "homeAway": "home",
+              "score": "100",
+              "team": {
+                "id": "23",
+                "abbreviation": "SAC",
+                "displayName": "Sacramento Kings"
+              }
+            },
+            {
+              "id": "19",
+              "homeAway": "away",
+              "score": "107",
+              "team": {
+                "id": "19",
+                "abbreviation": "ORL",
+                "displayName": "Orlando Magic"
+              }
+            }
+          ],
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 4,
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "401909965",
+      "date": "2026-11-11T04:00Z",
+      "name": "Oklahoma City Thunder at Portland Trail Blazers",
+      "season": {
+        "year": 2027,
+        "type": 2,
+        "slug": "regular-season"
+      },
+      "status": {
+        "clock": 0.0,
+        "displayClock": "0.0",
+        "period": 4,
+        "type": {
+          "id": "3",
+          "name": "STATUS_FINAL",
+          "state": "post",
+          "completed": true,
+          "description": "Final",
+          "detail": "Final",
+          "shortDetail": "Final"
+        }
+      },
+      "competitions": [
+        {
+          "competitors": [
+            {
+              "id": "22",
+              "homeAway": "home",
+              "score": "123",
+              "team": {
+                "id": "22",
+                "abbreviation": "POR",
+                "displayName": "Portland Trail Blazers"
+              }
+            },
+            {
+              "id": "25",
+              "homeAway": "away",
+              "score": "103",
+              "team": {
+                "id": "25",
+                "abbreviation": "OKC",
+                "displayName": "Oklahoma City Thunder"
+              }
+            }
+          ],
+          "status": {
+            "clock": 0.0,
+            "displayClock": "0.0",
+            "period": 4,
+            "type": {
+              "id": "3",
+              "name": "STATUS_FINAL",
+              "state": "post",
+              "completed": true,
+              "description": "Final",
+              "detail": "Final",
+              "shortDetail": "Final"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

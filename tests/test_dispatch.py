@@ -59,8 +59,8 @@ def test_preview_never_publishes_or_sends(store,monkeypatch):
 def test_schedule_kst_midnight_and_cutoff():
     # UTC 21:00 = next day KST 06:00.
     now=datetime(2026,11,11,21,tzinfo=timezone.utc)
-    assert dispatch.next_run(now).isoformat()=='2026-11-12T06:15:00+09:00'
-    assert dispatch.next_run(now+timedelta(minutes=16)).date()==date(2026,11,13)
+    assert dispatch.next_run(now).isoformat()=='2026-11-12T06:30:00+09:00'
+    assert dispatch.next_run(now+timedelta(minutes=31)).date()==date(2026,11,13)
 
 
 def test_direct_telegram_env(monkeypatch):

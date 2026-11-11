@@ -37,18 +37,41 @@ def lock():
 
 
 def fetch(store,url):
+    """Retry schema/transport failures; use only a bounded, disclosed validated cache."""
+    def validate(body):
+        if not isinstance(body,dict):raise ValueError('JSON object expected')
+        if 'site.api.espn.com' in url:
+            if ('scoreboard?' in url or '/schedule?' in url) and not isinstance(body.get('events'),list):raise ValueError('events schema changed')
+            if 'summary?' in url and not isinstance(body.get('header'),dict):raise ValueError('summary header schema changed')
+        else:
+            from .nba_quality import official_games
+            official_games(body)
+        return body
+    error='unknown'
     for attempt in range(3):
         try:
-            with httpx.Client(timeout=20,follow_redirects=False) as client:
-                response=client.get(url,headers={'User-Agent':'SPORTON research/0.3'})
-                response.raise_for_status();body=response.json()
-            payload={'source_url':url,'collected_at':utcnow().isoformat(),'body':body}
-            store.append('raw_data',digest(payload),payload)
-            return body
-        except Exception:
-            if attempt<2:clock.sleep(attempt+1)
-    store.append('source_failures',str(uuid4()),{'source_url':url,'at':utcnow().isoformat(),'error':'source unavailable after 3 attempts'})
-    raise ValueError('NBA source unavailable after retries')
+            with httpx.Client(timeout=8,follow_redirects=False) as client:
+                headers={'User-Agent':'SPORTON research/0.4'} if 'site.api.espn.com' in url else {'User-Agent':'Mozilla/5.0','Referer':'https://www.nba.com/','Origin':'https://www.nba.com'}
+                response=client.get(url,headers=headers)
+                response.raise_for_status();body=validate(response.json())
+        except Exception as exc:
+            error=type(exc).__name__
+            if attempt<2:clock.sleep(2**attempt)
+            continue
+        payload={'source_url':url,'collected_at':utcnow().isoformat(),'body':body,'schema_validated':True}
+        store.append('raw_data',digest(payload),payload)
+        return body
+    store.append('source_failures',str(uuid4()),{'source_url':url,'at':utcnow().isoformat(),'error':error,'status':'SOURCE_UNAVAILABLE','attempts':3})
+    age=timedelta(hours=24 if '/schedule?' in url else 1)
+    cached=store.latest_source(url)
+    for r in ([cached] if cached else []):
+        p=r['payload']
+        if not p.get('collected_at') or parse_time(p['collected_at'])>utcnow() or utcnow()-parse_time(p['collected_at'])>age:continue
+        try:body=validate(p['body'])
+        except (ValueError,KeyError,TypeError):continue
+        store.append('data_quality_logs',str(uuid4()),{'source_url':url,'state':'CACHED_FALLBACK','snapshot_id':r['id'],'collected_at':p['collected_at'],'at':utcnow().isoformat()})
+        return body
+    raise ValueError('source unavailable; no fresh schema-valid cache')
 
 
 def parse_time(value):return datetime.fromisoformat(value.replace('Z','+00:00'))
@@ -80,6 +103,7 @@ def describe(e,summary,now):
     hf,af=forms.get(str(h['id'])),forms.get(str(a['id']))
     scores=None
     if hf and af:scores=[round((af['for']+hf['against'])/2,1),round((hf['for']+af['against'])/2,1)]
+    from .nba_quality import quoted_prices
     markets=summary.get('pickcenter') or []
     m=next((m for m in markets if m.get('details')),None)
     if not m:m=next(iter(e['competitions'][0].get('odds',[])),{})
@@ -89,82 +113,166 @@ def describe(e,summary,now):
             updated=x.get('date')
             if updated and parse_time(updated)>now:continue
             injuries.append({'team':t['team']['abbreviation'],'player':x['athlete']['displayName'],'status':x.get('status','UNKNOWN'),'updated':updated})
-    status=e.get('status',{}).get('type',{})
+    status=(e.get('status') or e['competitions'][0].get('status',{})).get('type',{})
     live=bool(status.get('completed')) or start<=now or status.get('state') in ('in','post')
     return {'id':e['id'],'starts_at':start.isoformat(),'away':a['team']['displayName'],'home':h['team']['displayName'],
         'away_form':af,'home_form':hf,'baseline_scores_away_home':None if live else scores,'already_started':live,
-        'market':{'line':m.get('details'),'total':m.get('overUnder'),'bookmaker':m.get('provider',{}).get('name'),'published_at':None},
+        'market':{'line':m.get('details'),'total':m.get('overUnder'),'bookmaker':m.get('provider',{}).get('name'),'published_at':None,'observed_at':utcnow().isoformat(),'home_line':None,'prices':quoted_prices(m),'scope_verified':False},
         'injuries':injuries,'source_url':ESPN+'summary?event='+e['id'],'official_pick':'PASS',
         'baseline_version':'last5-opponent-average-v1','probability':None}
 
 
 def collect(store,target,now):
-    events={};issues=[]
+    from .nba_quality import official_games,match_schedule,regular,enrich,teams,code
+    events={};issues=[];official=[];available=False
+    for url in ('https://stats.nba.com/stats/scoreboardv3?GameDate='+str(target-timedelta(days=1))+'&LeagueID=00',
+                'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'):
+        try:
+            official=[g for g in official_games(fetch(store,url)) if parse_time(g['gameTimeUTC']).astimezone(KST).date()==target]
+            available=True
+            if official:break
+        except (ValueError,KeyError,TypeError):issues.append('SOURCE_UNAVAILABLE: '+url.split('/')[2])
     for d in (target-timedelta(days=1),target):
         try:
             board=fetch(store,ESPN+'scoreboard?dates='+d.strftime('%Y%m%d')+'&limit=100')
             for e in board.get('events',[]):
-                if parse_time(e['date']).astimezone(KST).date()==target:events[e['id']]=e
-        except ValueError:issues.append('ESPN 일정 조회 실패: '+str(d))
-    if not events and issues:raise ValueError('NBA schedule could not be verified')
-    official=None
-    try:
-        official=fetch(store,'https://stats.nba.com/stats/scoreboardv3?GameDate='+str(target-timedelta(days=1))+'&LeagueID=00')
-    except ValueError:issues.append('NBA 공식 일정 교차 확인 실패')
-    official_games=(official or {}).get('scoreboard',{}).get('games',[])
+                try:
+                    if regular(e) and parse_time(e['date']).astimezone(KST).date()==target:
+                        teams(e);events[e['id']]=e
+                except (ValueError,KeyError,TypeError,StopIteration):issues.append('INVALID_EVENT: '+str(e.get('id')))
+        except ValueError:issues.append('ESPN schedule SOURCE_UNAVAILABLE: '+str(d))
+    if not events and official:raise ValueError('Official games exist but fallback schedule returned none; schedule conflict')
+    if not events and any('ESPN schedule' in i for i in issues):raise ValueError('NBA schedule could not be verified')
     def detail(e):
         issue=None
         try:summary=fetch(store,ESPN+'summary?event='+e['id'])
         except ValueError:summary={};issue='경기 상세 수집 실패: '+e['name']
-        r=describe(e,summary,now)
-        matching=[g for g in official_games if parse_time(g['gameTimeUTC'])==parse_time(e['date'])
-            and g['homeTeam']['teamCity']+' '+g['homeTeam']['teamName']==r['home']
-            and g['awayTeam']['teamCity']+' '+g['awayTeam']['teamName']==r['away']]
-        r['schedule_crosschecked']=len(matching)==1
+        r=describe(e,summary,now);state,g=match_schedule(e,official,available)
+        meta=store.latest_source(ESPN+'summary?event='+e['id'])
+        if meta:
+            r['source_snapshot_id']=meta['id'];r['source_collected_at']=meta['payload'].get('collected_at')
+            r['market']['observed_at']=r['source_collected_at']
+        r.update(schedule_status=state,schedule_crosschecked=state=='VERIFIED',venue=e['competitions'][0].get('venue',{}).get('fullName'),schedule_snapshot=digest(e))
+        h,a=teams(e)
+        if g:
+            from .governance import register_alias
+            register_alias(store,'fixture','NBA','NBA',str(g['gameId']),e['id'],['NBA schedule and ESPN canonical team/time comparison'])
+            r['nba_fixture']={'game_id':g['gameId'],'league':'NBA','season':str(e.get('season',{}).get('year','unknown')),'starts_at':e['date'],
+                'home_team':str(g['homeTeam']['teamId']),'away_team':str(g['awayTeam']['teamId'])}
+        import re
+        match=re.match(r'([A-Za-z]+)\s+([+-]?\d+(?:\.\d+)?)',r['market']['line'] or '')
+        if match:
+            team,line=code(match[1]),float(match[2])
+            if team==code(h['team'].get('abbreviation','')):r['market']['home_line']=line
+            elif team==code(a['team'].get('abbreviation','')):r['market']['home_line']=-line
+        r=enrich(store,e,r,summary,fetch,now)
         return r,issue
     rows=[]
     with ThreadPoolExecutor(max_workers=4) as pool:
         for r,issue in pool.map(detail,sorted(events.values(),key=lambda e:e['date'])):
             if issue:issues.append(issue)
-            if not r['schedule_crosschecked']:issues.append('공식 일정 일치 미확인: '+r['away']+' @ '+r['home'])
+            if r['schedule_status']!='VERIFIED':issues.append(r['schedule_status']+': '+r['away']+' @ '+r['home'])
             rows.append(r)
     return rows,issues
 
 
 def prior_audit(store,now):
-    """No predictions are invented for the days before automation was installed."""
-    prior=[r for r in store.rows('professional_reports') if r['payload'].get('content',{}).get('dispatcher_version')=='nba-daily-v1'
-        and r['payload']['content'].get('date_kst')<str(now.astimezone(KST).date())]
-    return {'stored_reports':len(prior),'verified_accuracy':None,'note':'사전 원본과 확정 결과를 연결한 채점은 아직 미완료. 적중률·MAE·ROI를 만들어 표시하지 않음.'}
+    from .nba_quality import audit_predictions
+    reports=store.rows('professional_reports');briefings=store.rows('briefings')
+    prior=[r for r in reports if r['payload'].get('content',{}).get('date_kst','9999')<str(now.astimezone(KST).date())]
+    from .engine import audit as audit_verified_predictions
+    from .analytics import audit_result_corrections
+    verified_added=audit_verified_predictions(store);audit_result_corrections(store)
+    audit=audit_predictions(store,fetch,now)
+    audit['new_verified_audits']=len(verified_added)
+    from .nba_quality import learning_cycle
+    audit['learning_gate']=learning_cycle(store,now)
+    research=[r['payload'] for r in store.rows('training_runs') if r['payload'].get('kind')=='NBA_RETROSPECTIVE_COMPARISON']
+    reference=Path(__file__).resolve().parents[1]/'docs/validation/nba-three-season-research.json'
+    comparison=research[-1] if research else json.loads(reference.read_text()) if reference.exists() else None
+    audit['research_comparison']=comparison
+    return {**audit,'stored_reports':len(prior),'all_report_count':len(reports),'all_briefing_count':len(briefings),
+        'data_home':str(home().resolve()),'database_engine':store.engine.dialect.name,
+        'note':'사전 시각·원본 해시·경기 ID가 있는 연구 예측만 감사. 관찰 성적과 공식 가격픽을 분리함. 미등록 과거 채팅은 성적에 합산하지 않음.'}
 
 
-def render(target,now,rows,issues,audit):
-    lines=[f'# SPORTON NBA 일일 분석 · {target} (한국시간)',f'생성: {now.astimezone(KST).isoformat()}',
-        f'경기 {len(rows)}개 / 시작 전 {sum(not r["already_started"] for r in rows)}개','',
-        '## 전일 감사',f'보관된 이전 자동 보고서: {audit["stored_reports"]}개. {audit["note"]}','',
-        '## 판단 방법과 한계',
-        '점수 시나리오 = (자팀 최근 최대 5경기 득점 평균 + 상대 최근 최대 5경기 실점 평균) / 2.',
-        '최소 3경기가 필요하다. 현재 경기 이후 기록은 제외한다. 이는 시계열 외부 검증을 통과한 모델이 아니며 예상 확률·가격 우위를 의미하지 않는다.',
-        '결장 영향·휴식·상대 전력·포제션을 수치 보정하지 않았다. 승패 방향과 점수는 탐색적 기준선이며 공식 추천은 PASS다.',
-        'ESPN 부상 표기를 사용하며 공식 최종 부상보고서·선발 5인을 확인한 것으로 표시하지 않는다. 구간별 점수를 임의로 나누지 않는다.','']
+def top_watch(rows):
+    eligible=[]
     for r in rows:
-        lines.extend([f'## {parse_time(r["starts_at"]).astimezone(KST):%H:%M} {r["away"]} @ {r["home"]}',
-            '일정 교차 확인: '+('NBA 공식·ESPN 일치' if r['schedule_crosschecked'] else '미확인'),
-            f'조회 시장: {r["market"]["line"] or "MISSING"} / U/O {r["market"]["total"] if r["market"]["total"] is not None else "MISSING"} · {r["market"]["bookmaker"] or "출처 미확인"} · 원 공개 시각 미확인'])
-        scores=r['baseline_scores_away_home']
+        if r.get('review',{}).get('verdict')!='PASS' or not r.get('baseline_scores_away_home'):continue
+        margin=r.get('predicted_margin');line=r.get('market',{}).get('home_line')
+        if margin is None or line is None or abs(margin+line)<=2:continue
+        if r.get('analysis_level')=='INSUFFICIENT_DATA':continue
+        observed=r.get('market',{}).get('observed_at')
+        if not observed or (utcnow()-parse_time(observed)).total_seconds()>900:continue
+        eligible.append({'game_id':r['id'],'match':r['away']+' @ '+r['home'],'selection':'home spread' if margin+line>0 else 'away spread',
+            'home_line':line,'scenario_gap':abs(margin+line),'class':'WATCH','meaning':'unvalidated scenario discrepancy, not verified EV','observed_at':r['market'].get('observed_at')})
+    return sorted(eligible,key=lambda r:r['scenario_gap'],reverse=True)[:3]
+
+
+def render(target,now,rows,issues,audit,run_state=None,origin=None):
+    scheduled=datetime.combine(target,time(6,30),KST)
+    pre=[r for r in rows if not r['already_started']];valid=[r for r in pre if r.get('baseline_scores_away_home')]
+    lines=[f'# SPORTON NBA 분석 · {target} ({["월","화","수","목","금","토","일"][target.weekday()]}요일)',
+        '## 1. 운영 상태',f'예정: {scheduled.isoformat()} / 실제 생성: {now.astimezone(KST).isoformat()}',
+        f'실행 구분: {origin or os.getenv("GITHUB_EVENT_NAME","manual")} / 전체 {len(rows)}경기, 시작 전 {len(pre)}, 사전 수치 생성 {len(valid)}/{len(pre)}',
+        f'최근 전력 이력 {sum(bool(r.get(s+"_form")) for r in rows for s in ("home","away"))}/{2*len(rows)}팀; 효율 기록 {sum(bool(r.get("efficiency",{}).get(s)) for r in rows for s in ("home","away"))}/{2*len(rows)}팀; 공식 일정 일치 {sum(r.get("schedule_status")=="VERIFIED" for r in rows)}/{len(rows)}경기',
+        f'분석 상태: {run_state or "COMPLETED_PARTIAL"} · 연구 기준선과 검증 모델을 구분함','',
+        '## 2. 전일 감사',f'현재 DB: 보고서 {audit.get("all_report_count",audit.get("stored_reports",0))}개 / 브리핑 {audit.get("all_briefing_count",0)}개 / 이전 날짜 보고서 {audit.get("stored_reports",0)}개',
+        audit.get('note',''),'관찰 감사: '+str({k:audit.get(k) for k in ('n','direction_wins','direction_n','accuracy','team_mae','margin_mae','total_mae')}),
+        f'공식 가격픽 {audit.get("official_priced_n",0)}개; ROI {audit.get("roi")}; 확률 교정·구간 성적은 원본이 없으면 미산출.',
+        '큰 마진 오차 3건: '+str(audit.get('worst_three',[])),'',
+        '## 3. 오류와 절차 개선',
+        '종료 후 사라지는 summary 최근 5경기를 팀 시즌 일정으로 복구. 최근 5/10/시즌 및 홈·원정을 분리. 공급원 장애와 일정 충돌을 구분.',
+        '관측 기록의 공개 시각이 없어 자동 학습 승격하지 않음. 학습 가중치 임의 변경 없음. 개선 효과는 외부표본 검증 전까지 미입증.','',
+        '## 4. 전 경기 분석']
+    for r in rows:
+        lines.extend([f'### {parse_time(r["starts_at"]).astimezone(KST):%H:%M} {r["away"]} @ {r["home"]}',
+            f'장소: {r.get("venue") or "미확인"} / {"사후 감사 대상" if r["already_started"] else "시작 전"} / 일정: {r.get("schedule_status","PARTIALLY_VERIFIED")}',
+            f'분석: {r.get("analysis_level","PARTIAL_ANALYSIS")} / 시장 판단: {r.get("recommendation_status","NO_BET")} / 모델: {r.get("model_version","baseline")}',
+            f'시장: {r["market"]["line"] or "미확인"}, U/O {r["market"]["total"]} · {r["market"]["bookmaker"] or "업체 미확인"} · 조회 {r["market"].get("observed_at")} (원 공개 시각 미확인)'])
+        prices=r.get('market',{}).get('prices',{})
+        if prices:lines.append('조회 배당(십진): '+', '.join(k+' '+str(v['decimal']) for k,v in prices.items() if v.get('decimal') is not None))
+        scores=r.get('baseline_scores_away_home')
         if scores:
-            away,home_score=scores;lean=r['home'] if home_score>away else r['away'] if away>home_score else '동률'
-            lines.append(f'탐색 점수(원정–홈): {away:.1f}–{home_score:.1f}; 홈 마진 {home_score-away:+.1f}; 총점 {away+home_score:.1f}; 기준선 방향: {lean}')
-        else:lines.append('점수/승패 판단: '+('이미 시작/종료 → 사전 예측 금지' if r['already_started'] else '최근 결과 표본 부족 → 산출 불가'))
-        for label,f in [('원정',r['away_form']),('홈',r['home_form'])]:
-            if not f:lines.append(label+' 최근 결과: MISSING');continue
+            a,h=scores;lean=r['home'] if h>a else r['away'] if a>h else '동률'
+            lines.append(f'예상 시나리오(원정–홈): {a:.1f}–{h:.1f}; 홈 마진 {h-a:+.1f}; 총점 {h+a:.1f}; 방향 {lean}')
+            line=r['market'].get('home_line');total=r['market'].get('total')
+            if line is not None:lines.append(f'핸디 비교: 홈 {line:+.1f}, 시나리오 잔차 {h-a+line:+.1f} → '+('홈 방향' if h-a+line>0 else '원정 방향' if h-a+line<0 else '중립'))
+            if total is not None:lines.append('총점 비교: '+('OVER' if h+a>total else 'UNDER' if h+a<total else '중립')+f' (차이 {h+a-total:+.1f})')
+        else:lines.append('사전 수치 미생성: '+('이미 시작/종료' if r['already_started'] else '최소 근거 부족'))
+        for side,label in [('away','원정'),('home','홈')]:
+            f=r.get(side+'_form')
+            if not f:continue
+            windows=[]
+            for k,title in [('last10','최근10'),('season','시즌'),('home','홈'),('away','원정')]:
+                w=f.get(k)
+                if w:windows.append(f'{title} {w["n"]}경기 득 {w["for"]:.1f}/실 {w["against"]:.1f}')
+            lines.append(f'{label} 최근 {f["n"]}경기 {f["wins"]}승 / 득 {f["for"]:.1f}, 실 {f["against"]:.1f}; '+ '; '.join(windows))
+            ef=r.get('efficiency',{}).get(side)
+            if ef:
+                m=ef['metrics'];lines.append(f'파생 효율({ef["n"]}경기): ORtg {m["ortg"]:.1f}, DRtg {m["drtg"]:.1f}, Net {m["net_rtg"]:+.1f}, Pace {m["pace"]:.1f}, eFG {m["efg_pct"]:.3f}, TS {m["ts_pct"]:.3f}, 3PAr {m["three_par"]:.3f}, FTr {m["ftr"]:.3f}, TOV {m["tov_pct"]:.3f}; 공식 포제션·추적 수치 아님')
             gap=(parse_time(r['starts_at'])-parse_time(f['last_start'])).total_seconds()/3600
-            lines.append(f'{label} 최근 {f["n"]}경기: {f["wins"]}승 {f["n"]-f["wins"]}패, 득점 {f["for"]:.1f}/실점 {f["against"]:.1f}, 직전 경기 시작 간격 {gap:.1f}시간'+(' → 연속 경기 일정 주의' if gap<36 else ''))
-        lines.append('주요 명단 표기: '+('; '.join(f'{x["team"]} {x["player"]} {x["status"]}' for x in r['injuries']) or '조회된 명단 없음. 전원 정상 출전을 뜻하지 않음.'))
-        lines.extend(['반대 시나리오: 최근 3~5경기 점수는 상대 강도·외곽 성공률에 민감하다. 대체 선수 역할과 선발 확정이 없어 결장 효과를 과대·과소평가할 수 있다.',
-            '승패/핸디/UO 공식 추천: PASS. 시장과 기준선 차이만으로 TOP 픽을 생성하지 않음.',r['source_url'],''])
-    lines.extend(['## 수집 오류',*(issues or ['없음']), '','## 다음 검증',
-        '불변 보고서와 실제 결과를 연결한 감사, 공식 명단·포제션 피처, 후보 모델 외부표본 검증이 후속 과제다. 보고서 생성·자동 전송 성공을 예측 성능 개선으로 간주하지 않는다.'])
+            lines.append(f'{label} 직전 시작 간격 {gap:.1f}시간'+(' (연속 경기)' if gap<36 else ''))
+        injuries=r.get('injuries',[])
+        if injuries:lines.append('선수 변수(ESPN 표기): '+'; '.join(f'{i["team"]} {i["player"]} {i["status"]}' for i in injuries))
+        review=r.get('review',{})
+        lines.extend(['주요 반대 근거: '+' / '.join(review.get('counter_evidence',[])[:4]),r['source_url'],''])
+    comparison=audit.get('research_comparison')
+    if comparison:
+        lines.extend(['### 회고 연구 모델 비교',f'3시즌 {comparison["source_games"]}경기, {comparison["usable_samples"]}샘플. 시간순 학습·교정·검증 분리, 실전 검증/자동 승격 아님.'])
+        fold=comparison['folds'][-1]
+        for name,m in fold['metrics'].items():lines.append(f'{name}: 외부 구간 {m["n"]}경기, 팀 득점 MAE {m["score_mae"]:.2f}, 마진 MAE {m["margin_mae"]:.2f}, 총점 MAE {m["total_mae"]:.2f}, Brier {m["brier"]:.3f}')
+        lines.append('공개 아카이브의 최초 정보 공개 시각 미확보. 연구 개선을 실전 성능 개선으로 인정하지 않음. 현재 학습 게이트: '+str(audit.get('learning_gate',{}).get('state','미확인')))
+    lines.extend(['## 5. 독립 심사', '코드 기반 독립 원자료/시각/수치 검사를 실행. 전문가 LLM 심사는 미연결이며 AI 검토 완료로 표시하지 않음.'])
+    for r in rows:
+        v=r.get('review',{});lines.append(f'{r["away"]} @ {r["home"]}: {v.get("verdict","NO")} — '+ '; '.join(v.get('reasons',['심사 기록 없음'])))
+    lines.extend(['','## 6. TOP 관찰 후보', '공식 가격픽은 별도 자격 미충족으로 0개. 아래는 검증되지 않은 시나리오와 시장선 차이가 2점을 초과한 WATCH이며 수익 우위가 아니다.'])
+    top=top_watch(rows)
+    lines.extend([f'{i+1}. {t["match"]}: {t["selection"]}, 홈 기준 {t["home_line"]:+.1f}, 시나리오 차이 {t["scenario_gap"]:.1f}점 / WATCH / 조회 {t["observed_at"]}' for i,t in enumerate(top)] or ['해당 기준을 충족한 관찰 후보 없음. 강제 선정하지 않음.'])
+    lines.extend(['','## 7. DB·다음 감사','원본 저장/예측 ID/심사 기록은 보고서 저장 트랜잭션과 연결된다. 시작 후 기록은 사전 성적에서 제외.',
+        '공식 포제션·Usage·On/Off·확정 선발·선수별 이동/출전시간 및 구간 모델이 미확보이므로 FULL_ANALYSIS로 표시하지 않음.',
+        '점수는 포제션 기반 파생 효율 Baseline(양 팀 3경기 이상) 또는 최근 득실점 비교 Baseline을 명시한다. 공식 추적 데이터와 구분한다. 모든 점수 시나리오는 비교용 Baseline이다. 검증된 Champion이 있을 때만 기존 정량 엔진을 사용한다.','수집 이슈: '+('; '.join(issues) or '없음')])
     return '\n'.join(lines)
 
 
@@ -178,36 +286,92 @@ def alert(store,message):
         store.append('briefing_events',str(uuid4()),{'action':'nba_dispatch_alert_failed','at':utcnow().isoformat()})
 
 
-def run(store,target=None,now=None,dry_run=False):
-    now=now or utcnow();target=target or now.astimezone(KST).date();key='nba-daily-'+str(target)
+def job_event(store,job_id,state,phase,**extra):
+    payload={'job_id':job_id,'state':state,'phase':phase,'at':utcnow().isoformat(),**extra}
+    store.append('job_executions',str(uuid4()),payload)
+
+
+def _run(store,target,now,dry_run,job_id,origin):
+    from .nba_quality import VERSION,save_predictions
+    key=VERSION+'-'+str(target)
+    if origin!='schedule':key+='-manual-'+os.getenv('GITHUB_RUN_ID','local')
     with lock():
-        if store.get('briefing_events','telegram:sent:'+key):return {'status':'already_sent','date_kst':str(target)}
+        if not dry_run and store.get('briefing_events','telegram:sent:'+key):return {'status':'already_sent','date_kst':str(target)}
         if not dry_run and not settings():raise ValueError('Telegram not configured')
         existing=store.get('briefings',key)
         if existing:
             content=existing['snapshot'];record={'id':key,'data_mode':'real','markdown':content['markdown']}
         else:
-            rows,issues=collect(store,target,now);audit=prior_audit(store,now)
-            markdown=render(target,utcnow(),rows,issues,audit)
-            content={'dispatcher_version':'nba-daily-v1','date_kst':str(target),'as_of':utcnow().isoformat(),'games':rows,'issues':issues,'audit':audit,'markdown':markdown}
-            # Stable daily ID: retries cannot rewrite the original analysis.
+            job_event(store,job_id,'RUNNING','collection_started')
+            rows,issues=collect(store,target,now)
+            job_event(store,job_id,'RUNNING','collection_completed',games=len(rows),issues=len(issues))
+            audit=prior_audit(store,utcnow())
+            # Collection may cross tipoff. Recheck the actual save clock, not the requested clock.
+            generated=utcnow()
+            for r in rows:
+                if parse_time(r['starts_at'])<=generated:
+                    r['already_started']=True;r['baseline_scores_away_home']=None
+                    r['recommendation_status']='NO_BET'
+                    if r.get('review'):r['review']={**r['review'],'verdict':'NO','reasons':['Already started at analysis completion; audit only.']}
+            pre=[r for r in rows if not r['already_started']]
+            valid=[r for r in pre if r.get('baseline_scores_away_home') and r.get('review',{}).get('verdict','PASS')=='PASS']
+            state='COMPLETED' if valid and len(valid)==len(pre) and not issues and all(r.get('analysis_level')=='FULL_ANALYSIS' for r in valid) else 'COMPLETED_PARTIAL'
+            if pre and not valid:state='FAILED'
+            if not rows and not dry_run:
+                job_event(store,job_id,'COMPLETED','no_games_no_notification')
+                return {'status':'no_games','date_kst':str(target)}
+            markdown=render(target,generated,rows,issues,audit,run_state=state,origin=origin)
+            markdown+='\n\n보고서 실행 ID: '+job_id+' / 원본 ID: '+key+' / 저장 시 검증할 SHA256: '+digest({'games':rows,'as_of':generated.isoformat()})
+            content={'dispatcher_version':VERSION,'date_kst':str(target),'as_of':generated.isoformat(),'origin':origin,'job_id':job_id,
+                'run_state':state,'scheduled_for':datetime.combine(target,time(6,30),KST).isoformat(),
+                'games':rows,'issues':issues,'audit':audit,'top_watch':top_watch(rows),'markdown':markdown}
+            job_event(store,job_id,'RUNNING','analysis_completed',result_state=state,pregame_count=len(pre),analysis_count=len(valid))
             from .governance import register_report
             if not dry_run:
-                rid=register_report(store,'RESEARCH',content=content)
-                store.append('briefings',key,{'id':key,'generated_at':utcnow().isoformat(),'scheduled_for':datetime.combine(target,time(6,30),KST).isoformat(),'data_mode':'real','snapshot':content,'markdown':markdown,'research_report_id':rid})
+                with store.transaction() as conn:
+                    rid=register_report(store,'RESEARCH',content=content,conn=conn)
+                    store.append('briefings',key,{'id':key,'generated_at':generated.isoformat(),'scheduled_for':content['scheduled_for'],
+                        'data_mode':'real','snapshot':content,'markdown':markdown,'research_report_id':rid},conn=conn)
+                    save_predictions(store,rows,rid,generated.isoformat(),conn,origin=origin)
+                job_event(store,job_id,'RUNNING','report_stored',report_id=rid,content_hash=digest(content))
             record={'id':key,'data_mode':'real','markdown':markdown}
         directory=home()/'daily-reports';directory.mkdir(exist_ok=True)
         path=directory/(str(target)+('-preview' if dry_run else '')+'.md');path.write_text(record['markdown'])
-        if dry_run:return {'status':'preview','report':str(path)}
+        if dry_run:return {'status':'preview','report':str(path),'run_state':content['run_state']}
+        if content['run_state']=='FAILED':raise ValueError('All pregame analyses lack minimum evidence; partial failure recorded, no normal report sent')
         result=deliver(store,record)
         if result['status'] not in ('sent','already_sent'):raise ValueError('Telegram delivery incomplete: '+result['status'])
-        late=utcnow().astimezone(KST).date()==target and utcnow().astimezone(KST).time()>time(6,30)
-        store.append('briefing_events',str(uuid4()),{'action':'nba_dispatch_complete','at':utcnow().isoformat(),'date_kst':str(target),'late':late,'report_id':key})
-        return {'status':result['status'],'date_kst':str(target),'late':late,'report':str(path)}
+        job_event(store,job_id,content['run_state'],'delivery_completed',report_id=key)
+        late=utcnow()>datetime.combine(target,time(6,30),KST)
+        store.append('briefing_events',str(uuid4()),{'action':'nba_dispatch_complete','at':utcnow().isoformat(),'date_kst':str(target),'late':late,'origin':origin,'report_id':key})
+        return {'status':result['status'],'date_kst':str(target),'late':late,'origin':origin,'run_state':content['run_state'],'report':str(path)}
+
+
+def run(store,target=None,now=None,dry_run=False,origin=None):
+    now=now or utcnow();target=target or now.astimezone(KST).date();origin=origin or os.getenv('GITHUB_EVENT_NAME','manual')
+    job_id=str(uuid4());scheduled=datetime.combine(target,time(6,30),KST)
+    job_event(store,job_id,'SCHEDULED','created',scheduled_for=scheduled.isoformat(),origin=origin,dry_run=dry_run)
+    receipt=store.get('briefing_events','telegram:sent:nba-daily-v2-'+str(target))
+    previous_jobs=store.rows('job_executions')
+    timely_ids={r['payload']['job_id'] for r in previous_jobs if r['payload'].get('phase')=='created'
+        and r['payload'].get('origin')=='schedule' and r['payload'].get('scheduled_for')==scheduled.isoformat()
+        and parse_time(r['payload']['at'])<=scheduled+timedelta(minutes=15)}
+    timely_started=any(r['payload'].get('job_id') in timely_ids and r['payload'].get('phase')=='execution_started' for r in previous_jobs)
+    if origin=='schedule' and now>scheduled+timedelta(minutes=15) and not receipt and not timely_started:
+        job_event(store,job_id,'MISSED_SCHEDULE','delayed_scheduled_invocation',scheduled_for=scheduled.isoformat(),actual=now.isoformat(),
+            note='Observed delayed invocation; not proof that an earlier independent run failed.')
+    job_event(store,job_id,'RUNNING','execution_started',origin=origin)
+    try:
+        result=_run(store,target,now,dry_run,job_id,origin)
+        job_event(store,job_id,result.get('run_state','COMPLETED'),'execution_finished',outcome=result['status'])
+        return result
+    except Exception as exc:
+        job_event(store,job_id,'FAILED','execution_failed',error_type=type(exc).__name__)
+        raise
 
 
 def next_run(now):
-    local=now.astimezone(KST);scheduled=datetime.combine(local.date(),time(6,15),KST)
+    local=now.astimezone(KST);scheduled=datetime.combine(local.date(),time(6,30),KST)
     return scheduled if local<scheduled else scheduled+timedelta(days=1)
 
 
@@ -221,12 +385,12 @@ def daemon(store,start_date=None):
         try:fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:raise ValueError('NBA daemon already running') from None
         while not STOP:
-            now=utcnow();local=now.astimezone(KST);due=local.time()>=time(6,15) and (start_date is None or local.date()>=start_date)
-            key='nba-daily-'+str(local.date())
+            now=utcnow();local=now.astimezone(KST);due=local.time()>=time(6,30) and (start_date is None or local.date()>=start_date)
+            key='nba-daily-v2-'+str(local.date())
             if due and not store.get('briefing_events','telegram:sent:'+key):
                 attempts=[e for e in store.rows('briefing_events') if e['payload'].get('action')=='nba_dispatch_failed' and e['payload'].get('date_kst')==str(local.date())]
                 if not attempts or (now-parse_time(attempts[-1]['created_at'])).total_seconds()>=300:
-                    try:print(json.dumps(run(store),ensure_ascii=False),flush=True)
+                    try:print(json.dumps(run(store,origin='schedule'),ensure_ascii=False),flush=True)
                     except Exception:
                         store.append('briefing_events',str(uuid4()),{'action':'nba_dispatch_failed','date_kst':str(local.date()),'at':utcnow().isoformat()})
                         if not attempts:alert(store,'SPORTON: 오늘 NBA 자동 보고서 생성/전송이 실패해 5분 간격으로 재시도합니다. 실행 로그를 확인하세요.')
