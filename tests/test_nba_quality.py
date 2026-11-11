@@ -168,3 +168,38 @@ def test_successful_schedule_retry_is_not_a_missed_schedule(store,monkeypatch):
     monkeypatch.setattr(dispatch,'utcnow',lambda:late)
     assert dispatch.run(store,target,now=late,origin='schedule')['status']=='already_sent'
     assert not any(r['payload']['state']=='MISSED_SCHEDULE' for r in store.rows('job_executions'))
+
+
+def test_CDN_datetime_schema_and_expiring_official_cache(store,tmp_path):
+    from sporton.nba_quality import official_games,official_cache
+    from sporton.storage import digest
+    now=datetime(2030,1,2,0,tzinfo=timezone.utc)
+    game={'gameId':'TEST-cache','gameDateTimeUTC':now.isoformat(),'homeTeam':{'teamTricode':'NYK'},'awayTeam':{'teamTricode':'MIL'}}
+    gs=official_games({'leagueSchedule':{'gameDates':[{'games':[game]}]}})
+    assert gs[0]['gameTimeUTC']==game['gameDateTimeUTC']
+    p=tmp_path/'official-schedule-cache.json'
+    data={'source_url':'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json','collected_at':now.isoformat(),'games':gs,'body_sha256':digest(gs)}
+    p.write_text(json.dumps(data))
+    assert len(official_cache(store,date(2030,1,2),now+timedelta(hours=1))[0])==1
+    assert official_cache(store,date(2030,1,2),now+timedelta(hours=25))[0]==[]
+    data['body_sha256']='bad';p.write_text(json.dumps(data))
+    assert official_cache(store,date(2030,1,2),now+timedelta(hours=1))[0]==[]
+
+
+def test_cached_audits_require_original_and_do_not_pool_manual_scheduled(store):
+    from sporton.nba_quality import audit_predictions
+    from sporton.storage import digest
+    from sporton.governance import register_report
+    now=utcnow();start=now-timedelta(days=1);created=start-timedelta(hours=1)
+    for pid,scope in [('TEST-manual','MANUAL_OBSERVATION'),('TEST-scheduled','SCHEDULED_OBSERVATION')]:
+        row={'prediction_id':pid,'test_fixture':True};rid=register_report(store,'RESEARCH',content={'games':[row]},data_mode='TEST/FIXTURE')
+        store.append('critical_reviews','review:'+pid,{'verdict':'PASS','report_hash':digest(row)})
+        p={'kind':'daily_research_prediction','game_id':'TEST-GAME','report_id':rid,'review_id':'review:'+pid,'analysis_hash':digest(row),
+            'created_at':created.isoformat(),'starts_at':start.isoformat(),'scores':[100,110],'selection_class':scope}
+        store.append('forecast_components',pid,p)
+        g=grade({**p,'prediction_id':pid},{'home_score':110,'away_score':100,'source_grade':'TEST/FIXTURE'})
+        store.append('settlement_events','daily-audit:'+pid,{'evaluation':g})
+    def no_network(*a):pytest.fail('cached audit must reuse result after verifying original')
+    result=audit_predictions(store,no_network,now)
+    assert result['n']==1 and result['all_evaluation_count']==2 and result['main_scope']=='SCHEDULED_OBSERVATION'
+    assert result['observation_groups']['MANUAL_OBSERVATION']['n']==1 and result['official_priced_n']==0

@@ -1,0 +1,25 @@
+{
+  "workflow_run": 43045730712,
+  "report_id": "nba-daily-v2-2026-11-12-manual-43045730712",
+  "origin": "workflow_dispatch",
+  "state": "COMPLETED_PARTIAL",
+  "games": 10,
+  "official_matches": 0,
+  "history_teams": 20,
+  "efficiency_teams": 20,
+  "review_pass": 10,
+  "saved_predictions": 10,
+  "all_reports": 2,
+  "prior_reports_seen": 1,
+  "phases": [
+    "created",
+    "execution_started",
+    "collection_started",
+    "collection_completed",
+    "analysis_completed",
+    "report_stored",
+    "delivery_completed",
+    "execution_finished"
+  ],
+  "scheduled_slot_consumed": false
+}

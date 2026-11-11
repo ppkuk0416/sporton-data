@@ -55,5 +55,6 @@ jobs:
           path: |
             var/dispatch/sporton.db*
             var/dispatch/daily-reports/
+            var/dispatch/official-schedule-cache.json
           retention-days: 90
           if-no-files-found: warn

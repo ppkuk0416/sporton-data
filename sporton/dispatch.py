@@ -128,10 +128,22 @@ def collect(store,target,now):
     for url in ('https://stats.nba.com/stats/scoreboardv3?GameDate='+str(target-timedelta(days=1))+'&LeagueID=00',
                 'https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json'):
         try:
-            official=[g for g in official_games(fetch(store,url)) if parse_time(g['gameTimeUTC']).astimezone(KST).date()==target]
+            body=fetch(store,url);all_games=official_games(body)
+            official=[g for g in all_games if parse_time(g['gameTimeUTC']).astimezone(KST).date()==target]
+            if 'cdn.nba.com' in url and all_games:
+                meta=store.latest_source(url)
+                if meta:
+                    projection=[{k:g[k] for k in ('gameId','gameTimeUTC','homeTeam','awayTeam')} for g in all_games]
+                    cache={'source_url':url,'collected_at':meta['payload']['collected_at'],'body_sha256':digest(projection),'games':projection,'max_age_hours':24}
+                    temp=home()/'official-schedule-cache.tmp';temp.write_text(json.dumps(cache));temp.replace(home()/'official-schedule-cache.json')
             available=True
             if official:break
         except (ValueError,KeyError,TypeError):issues.append('SOURCE_UNAVAILABLE: '+url.split('/')[2])
+    cached_official=None
+    if not official:
+        from .nba_quality import official_cache
+        official,cached_official=official_cache(store,target,now)
+        if official:available=True
     for d in (target-timedelta(days=1),target):
         try:
             board=fetch(store,ESPN+'scoreboard?dates='+d.strftime('%Y%m%d')+'&limit=100')
@@ -148,6 +160,8 @@ def collect(store,target,now):
         try:summary=fetch(store,ESPN+'summary?event='+e['id'])
         except ValueError:summary={};issue='경기 상세 수집 실패: '+e['name']
         r=describe(e,summary,now);state,g=match_schedule(e,official,available)
+        if cached_official and state=='VERIFIED':state='PARTIALLY_VERIFIED'
+        r['official_cached_evidence']=cached_official if g and cached_official else None
         meta=store.latest_source(ESPN+'summary?event='+e['id'])
         if meta:
             r['source_snapshot_id']=meta['id'];r['source_collected_at']=meta['payload'].get('collected_at')
@@ -231,6 +245,8 @@ def render(target,now,rows,issues,audit,run_state=None,origin=None):
             f'장소: {r.get("venue") or "미확인"} / {"사후 감사 대상" if r["already_started"] else "시작 전"} / 일정: {r.get("schedule_status","PARTIALLY_VERIFIED")}',
             f'분석: {r.get("analysis_level","PARTIAL_ANALYSIS")} / 시장 판단: {r.get("recommendation_status","NO_BET")} / 모델: {r.get("model_version","baseline")}',
             f'시장: {r["market"]["line"] or "미확인"}, U/O {r["market"]["total"]} · {r["market"]["bookmaker"] or "업체 미확인"} · 조회 {r["market"].get("observed_at")} (원 공개 시각 미확인)'])
+        cache=r.get('official_cached_evidence')
+        if cache:lines.append('공식 일정 캐시·실시간 ESPN의 팀/시각 일치. 공식 캐시 수집: '+cache['collected_at']+'; 공식 실시간 확인은 아님.')
         prices=r.get('market',{}).get('prices',{})
         if prices:lines.append('조회 배당(십진): '+', '.join(k+' '+str(v['decimal']) for k,v in prices.items() if v.get('decimal') is not None))
         scores=r.get('baseline_scores_away_home')

@@ -8,7 +8,8 @@ import statistics
 import re
 from uuid import uuid4
 from .contracts import utcnow
-from .storage import digest
+from .storage import digest,home
+from zoneinfo import ZoneInfo
 
 ALIASES={'NY':'NYK','GS':'GSW','SA':'SAS','NO':'NOP','WSH':'WAS','UTAH':'UTA','PHO':'PHX'}
 VERSION='nba-daily-v2'
@@ -89,7 +90,7 @@ def match_schedule(e,official,available):
 def official_games(body):
     if isinstance(body.get('scoreboard',{}).get('games'),list):return body['scoreboard']['games']
     schedule=body.get('leagueSchedule',{})
-    if isinstance(schedule.get('gameDates'),list):return [g for d in schedule['gameDates'] for g in d.get('games',[])]
+    if isinstance(schedule.get('gameDates'),list):return [{**g,'gameTimeUTC':g.get('gameTimeUTC') or g.get('gameDateTimeUTC')} for d in schedule['gameDates'] for g in d.get('games',[]) if g.get('gameTimeUTC') or g.get('gameDateTimeUTC')]
     raise ValueError('NBA schedule schema unavailable')
 
 
@@ -213,7 +214,7 @@ def grade(p,r):
         segments=[{'period':i+1,'team_mae':(abs(q[0]-r['away_periods'][i])+abs(q[1]-r['home_periods'][i]))/2,
             'margin_mae':abs((q[1]-q[0])-(r['home_periods'][i]-r['away_periods'][i])),
             'total_mae':abs(sum(q)-r['home_periods'][i]-r['away_periods'][i])} for i,q in enumerate(p['quarter_scores'])]
-    return {'prediction_id':p.get('prediction_id'),'game_id':p['game_id'],'actual_scores':[ap,hp],'predicted_scores':[a,h],
+    return {'prediction_id':p.get('prediction_id'),'prediction_created_at':p['created_at'],'game_id':p['game_id'],'actual_scores':[ap,hp],'predicted_scores':[a,h],
         'direction_correct':None if abs(margin)<1e-9 else (margin>0)==(actual>0),'spread':spread,'total':total_grade,
         'team_mae':(abs(a-ap)+abs(h-hp))/2,'margin_mae':abs(margin-actual),'total_mae':abs(a+h-ap-hp),
         'selection_class':p.get('selection_class','OBSERVATION'),'roi':None,'segment_metrics':segments,'away_score_error':a-ap,'home_score_error':h-hp,'result_grade':r['source_grade']}
@@ -225,7 +226,6 @@ def audit_predictions(store,fetch,now):
         p=row['payload']
         if p.get('kind')!='daily_research_prediction':continue
         key='daily-audit:'+row['id'];old=store.get('settlement_events',key)
-        if old:out.append(old['evaluation']);continue
         if dt(p['created_at'])>=dt(p['starts_at']):excluded.append(row['id']);continue
         if dt(p['starts_at'])>now:continue
         try:
@@ -234,6 +234,7 @@ def audit_predictions(store,fetch,now):
             review=store.get('critical_reviews',p.get('review_id'))
             if not source_row or digest(source_row)!=p.get('analysis_hash') or not review or review['verdict']!='PASS' or review['report_hash']!=p['analysis_hash']:
                 excluded.append(row['id']);continue
+            if old:out.append(old['evaluation']);continue
             gid=p['game_id']
             if gid not in cache:cache[gid]=fetch(store,'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event='+gid)
             summary=cache[gid];e=summary.get('header',{});competitions=e.get('competitions',[])
@@ -248,8 +249,14 @@ def audit_predictions(store,fetch,now):
             out.append(evaluation)
         except (ValueError,KeyError,TypeError):continue
     scopes={scope:{'n':sum(e['selection_class']==scope for e in out),'direction_n':sum(e['selection_class']==scope and e['direction_correct'] is not None for e in out),'direction_wins':sum(e['selection_class']==scope and e['direction_correct'] is True for e in out)} for scope in {e['selection_class'] for e in out}}
+    all_count=len(out)
+    main_scope='SCHEDULED_OBSERVATION' if any(e['selection_class']=='SCHEDULED_OBSERVATION' for e in out) else 'MANUAL_OBSERVATION' if any(e['selection_class']=='MANUAL_OBSERVATION' for e in out) else 'OBSERVATION'
+    first_by_game={}
+    for e in sorted(out,key=lambda e:e.get('prediction_created_at','')):
+        if e['selection_class']==main_scope:first_by_game.setdefault(e['game_id'],e)
+    out=list(first_by_game.values())
     resolved=[e for e in out if e['direction_correct'] is not None]
-    return {'n':len(out),'direction_n':len(resolved),'direction_wins':sum(e['direction_correct'] for e in resolved),
+    return {'n':len(out),'main_scope':main_scope,'all_evaluation_count':all_count,'direction_n':len(resolved),'direction_wins':sum(e['direction_correct'] for e in resolved),
         'accuracy':sum(e['direction_correct'] for e in resolved)/len(resolved) if resolved else None,
         'team_mae':statistics.mean(e['team_mae'] for e in out) if out else None,'margin_mae':statistics.mean(e['margin_mae'] for e in out) if out else None,
         'total_mae':statistics.mean(e['total_mae'] for e in out) if out else None,'worst_three':sorted(out,key=lambda e:e['margin_mae'],reverse=True)[:3],
@@ -342,3 +349,25 @@ def quoted_prices(market):
                 else:raw=market.get(side+'Odds')
             out[kind+'_'+side]={'american':raw,'decimal':decimal(raw)}
     return out
+
+
+def official_cache(store,target,now):
+    from pathlib import Path
+    import json
+    paths=[Path(__file__).resolve().parents[1]/'data/nba-official-schedule-cache.json', home()/'official-schedule-cache.json']
+    candidates=[]
+    for path in paths:
+        if not path.exists():continue
+        try:
+            data=json.loads(path.read_text());at=dt(data['collected_at'])
+            if data.get('source_url')!='https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json':continue
+            if at>now or now-at>timedelta(hours=min(24,data.get('max_age_hours',24))):continue
+            if digest(data['games'])!=data['body_sha256']:continue
+            games=[g for g in data['games'] if dt(g['gameTimeUTC']).astimezone(ZoneInfo('Asia/Seoul')).date()==target]
+            if games:candidates.append((at,games,data))
+        except (ValueError,KeyError,TypeError):continue
+    if not candidates:return [],None
+    _,games,data=max(candidates,key=lambda c:c[0])
+    store.append('data_quality_logs',str(uuid4()),{'state':'OFFICIAL_CACHED_SNAPSHOT','source_url':data['source_url'],'collected_at':data['collected_at'],
+        'snapshot_hash':data['body_sha256'],'at':utcnow().isoformat(),'live_official_verified':False})
+    return games,{'source_url':data['source_url'],'collected_at':data['collected_at'],'body_sha256':data['body_sha256']}
