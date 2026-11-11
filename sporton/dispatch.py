@@ -9,6 +9,7 @@ from datetime import datetime,timedelta,time,timezone,date
 import fcntl
 import json
 import os
+import math
 from pathlib import Path
 import signal
 import time as clock
@@ -55,12 +56,12 @@ def parse_time(value):return datetime.fromisoformat(value.replace('Z','+00:00'))
 
 def baseline(team,start):
     """Observed final scores strictly before this game and before the collection clock."""
-    points=[];latest=None
+    points=[]
     for e in team.get('events',[]):
         at=parse_time(e['gameDate'])
         if at>=start or at>=utcnow() or e.get('gameResult') not in ('W','L'):continue
         h,a=float(e['homeTeamScore']),float(e['awayTeamScore'])
-        if not all(__import__('math').isfinite(x) and x>=0 for x in (h,a)):continue
+        if not all(math.isfinite(x) and x>=0 for x in (h,a)):continue
         if str(e['homeTeamId'])==str(team['team']['id']):pf,pa=h,a
         elif str(e['awayTeamId'])==str(team['team']['id']):pf,pa=a,h
         else:continue
@@ -111,17 +112,22 @@ def collect(store,target,now):
         official=fetch(store,'https://stats.nba.com/stats/scoreboardv3?GameDate='+str(target-timedelta(days=1))+'&LeagueID=00')
     except ValueError:issues.append('NBA 공식 일정 교차 확인 실패')
     official_games=(official or {}).get('scoreboard',{}).get('games',[])
-    rows=[]
-    for e in sorted(events.values(),key=lambda e:e['date']):
+    def detail(e):
+        issue=None
         try:summary=fetch(store,ESPN+'summary?event='+e['id'])
-        except ValueError:summary={};issues.append('경기 상세 수집 실패: '+e['name'])
+        except ValueError:summary={};issue='경기 상세 수집 실패: '+e['name']
         r=describe(e,summary,now)
         matching=[g for g in official_games if parse_time(g['gameTimeUTC'])==parse_time(e['date'])
             and g['homeTeam']['teamCity']+' '+g['homeTeam']['teamName']==r['home']
             and g['awayTeam']['teamCity']+' '+g['awayTeam']['teamName']==r['away']]
         r['schedule_crosschecked']=len(matching)==1
-        if not r['schedule_crosschecked']:issues.append('공식 일정 일치 미확인: '+e['name'])
-        rows.append(r)
+        return r,issue
+    rows=[]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for r,issue in pool.map(detail,sorted(events.values(),key=lambda e:e['date'])):
+            if issue:issues.append(issue)
+            if not r['schedule_crosschecked']:issues.append('공식 일정 일치 미확인: '+r['away']+' @ '+r['home'])
+            rows.append(r)
     return rows,issues
 
 

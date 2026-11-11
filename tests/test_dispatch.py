@@ -70,3 +70,16 @@ def test_direct_telegram_env(monkeypatch):
     assert settings()==('TEST_TOKEN','123')
     monkeypatch.setenv('SPORTON_TELEGRAM_CHAT_ID','-123')
     with pytest.raises(TelegramError):settings()
+
+
+def test_collection_deduplicates_dates_and_preserves_detail_failure(store,monkeypatch):
+    now=utcnow();e=event(now);target=dispatch.parse_time(e['date']).astimezone(dispatch.KST).date()
+    def fake_fetch(s,url):
+        if 'scoreboard?' in url:return {'events':[e,e]}
+        if 'scoreboardv3' in url:return {'scoreboard':{'games':[]}}
+        raise ValueError('TEST/FIXTURE unavailable')
+    monkeypatch.setattr(dispatch,'fetch',fake_fetch)
+    rows,issues=dispatch.collect(store,target,now)
+    assert len(rows)==1 and rows[0]['baseline_scores_away_home'] is None
+    assert any('상세 수집 실패' in issue for issue in issues)
+    assert rows[0]['schedule_crosschecked'] is False
