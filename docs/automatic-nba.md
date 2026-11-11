@@ -74,3 +74,23 @@ schedule/workflow_dispatch 실행에서 최신 DB와 전송 영수증을 복원�
 - runner가 아예 시작하지 않거나 Telegram이 중단되면 같은 채널로 장애를 알릴
   수 없다. GitHub 실패 알림은 계정 알림 설정에 의존한다.
 - 작업 활성화·실제 도착은 실행 증거를 확인하기 전에는 완료로 표시하지 않는다.
+
+## 실제 외부 활성화 검증 · 2026-11-11 KST
+
+GitHub repository secrets 등록 후 외부 runner에서 실행했다.
+
+- 최초 외부 실행: https://github.com/ppkuk0416/sporton-data/actions/runs/43037547787
+  — success, 로그 `status=sent`, `date_kst=2026-11-11`. 실제 Telegram Bot API 발송 성공과
+  DB·보고서 artifact 업로드를 확인했다. 오후 수동 검증이어서 `late=true`를 보존했다.
+- 두 번째 외부 실행: https://github.com/ppkuk0416/sporton-data/actions/runs/43037926066
+  — success, 로그 `status=already_sent`. 이전 artifact에서 성공 영수증을 복원해
+  실제 재발송을 막았다.
+- 워크플로는 main의 active 상태이며 KST 06:00/06:15/06:25/06:35 예약을 확인했다.
+  다음 기본 실행 대상일은 2026-11-12 KST다. 미래 cron 발동·06:30 도착을 사전에
+  성공으로 기록하지 않는다.
+- 현재 클라우드의 로컬 daemon은 SIGTERM으로 중지했고 lock 해제를 확인했다.
+  `var/nba-daemon-service.json`의 disabled 표시로 시작 도구의 자동 재시작도 막았다.
+  외부와 로컬의 서로 다른 DB로 인한 이중 발송을 방지한다.
+
+자동 전송 활성화가 모델 검증·공식 추천 정확도 확보를 뜻하지 않는다. 보고서는
+수집한 증거와 탐색 기준선, 결측·오류를 구분하는 연구 보고서다.

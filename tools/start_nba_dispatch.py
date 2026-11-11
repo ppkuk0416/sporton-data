@@ -16,7 +16,11 @@ with (home()/'nba-daemon.lock').open('a') as handle:
         print(json.dumps({'status':'already_running'}));raise SystemExit(0)
     finally:fcntl.flock(handle,fcntl.LOCK_UN)
 config=home()/'nba-daemon-service.json'
-if config.exists():start=json.loads(config.read_text())['start_date']
+if config.exists():
+    service=json.loads(config.read_text())
+    if service.get('disabled'):
+        print(json.dumps({'status':'disabled','reason':service.get('reason','external scheduler active')}));raise SystemExit(0)
+    start=service['start_date']
 else:
     local=utcnow().astimezone(KST);start=str(local.date()+timedelta(days=int(local.time()>time(6,30))))
     config.write_text(json.dumps({'start_date':start,'scope':'current_cloud_environment_only'}))
