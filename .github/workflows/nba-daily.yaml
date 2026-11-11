@@ -5,6 +5,12 @@ on:
     - cron: '30,40,50 21 * * *'
     - cron: '0 22 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'send report or validate without Telegram delivery'
+        type: choice
+        options: [send, preview]
+        default: send
 permissions:
   contents: read
   actions: read
@@ -16,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
+      SPORTON_DISPATCH_MODE: ${{ inputs.mode }}
       SPORTON_HOME: var/dispatch
       SPORTON_TELEGRAM_BOT_TOKEN: ${{ secrets.SPORTON_TELEGRAM_BOT_TOKEN }}
       SPORTON_TELEGRAM_CHAT_ID: ${{ secrets.SPORTON_TELEGRAM_CHAT_ID }}
@@ -46,7 +53,12 @@ jobs:
           pip install -r requirements.lock
           pip install --no-deps --no-build-isolation -e .
       - name: Collect, analyze, archive, send
-        run: python -m sporton.dispatch
+        run: |
+          if [ "$SPORTON_DISPATCH_MODE" = preview ]; then
+            python -m sporton.dispatch --dry-run
+          else
+            python -m sporton.dispatch
+          fi
       - name: Preserve raw evidence, original reports and delivery receipts
         if: always()
         uses: actions/upload-artifact@v4
