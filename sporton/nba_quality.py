@@ -368,6 +368,9 @@ def official_cache(store,target,now):
         except (ValueError,KeyError,TypeError):continue
     if not candidates:return [],None
     _,games,data=max(candidates,key=lambda c:c[0])
+    snapshot={'source_url':data['source_url']+'#validated-cache-projection','collected_at':data['collected_at'],
+        'body':data,'source_mode':'OFFICIAL_CACHED_PROJECTION','upstream_url':data['source_url']}
+    sid=digest(snapshot);store.append('raw_data',sid,snapshot,idempotent=True)
     store.append('data_quality_logs',str(uuid4()),{'state':'OFFICIAL_CACHED_SNAPSHOT','source_url':data['source_url'],'collected_at':data['collected_at'],
         'snapshot_hash':data['body_sha256'],'at':utcnow().isoformat(),'live_official_verified':False})
-    return games,{'source_url':data['source_url'],'collected_at':data['collected_at'],'body_sha256':data['body_sha256']}
+    return games,{'source_url':data['source_url'],'collected_at':data['collected_at'],'body_sha256':data['body_sha256'],'projection_snapshot_id':sid}

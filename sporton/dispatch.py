@@ -230,7 +230,7 @@ def render(target,now,rows,issues,audit,run_state=None,origin=None):
     lines=[f'# SPORTON NBA 분석 · {target} ({["월","화","수","목","금","토","일"][target.weekday()]}요일)',
         '## 1. 운영 상태',f'예정: {scheduled.isoformat()} / 실제 생성: {now.astimezone(KST).isoformat()}',
         f'실행 구분: {origin or os.getenv("GITHUB_EVENT_NAME","manual")} / 전체 {len(rows)}경기, 시작 전 {len(pre)}, 사전 수치 생성 {len(valid)}/{len(pre)}',
-        f'최근 전력 이력 {sum(bool(r.get(s+"_form")) for r in rows for s in ("home","away"))}/{2*len(rows)}팀; 효율 기록 {sum(bool(r.get("efficiency",{}).get(s)) for r in rows for s in ("home","away"))}/{2*len(rows)}팀; 공식 일정 일치 {sum(r.get("schedule_status")=="VERIFIED" for r in rows)}/{len(rows)}경기',
+        f'최근 전력 이력 {sum(bool(r.get(s+"_form")) for r in rows for s in ("home","away"))}/{2*len(rows)}팀; 효율 기록 {sum(bool(r.get("efficiency",{}).get(s)) for r in rows for s in ("home","away"))}/{2*len(rows)}팀; 일정 대조: 공식 실시간 {sum(r.get("schedule_status")=="VERIFIED" for r in rows)}경기 / 공식 캐시 {sum(bool(r.get("official_cached_evidence")) for r in rows)}경기 / 실제 충돌 {sum(r.get("schedule_status")=="SOURCE_CONFLICT" for r in rows)}경기',
         f'분석 상태: {run_state or "COMPLETED_PARTIAL"} · 연구 기준선과 검증 모델을 구분함','',
         '## 2. 전일 감사',f'현재 DB: 보고서 {audit.get("all_report_count",audit.get("stored_reports",0))}개 / 브리핑 {audit.get("all_briefing_count",0)}개 / 이전 날짜 보고서 {audit.get("stored_reports",0)}개',
         audit.get('note',''),'관찰 감사: '+str({k:audit.get(k) for k in ('n','direction_wins','direction_n','accuracy','team_mae','margin_mae','total_mae')}),

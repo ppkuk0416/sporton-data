@@ -124,3 +124,11 @@ SPORTON_TEST_POSTGRES_ADMIN_URL_FILE=/workspace/sporton-data/var/persistence-dev
 - CDN의 실제 시각 필드 `gameDateTimeUTC`도 정상화했다. 이 필드 차이를 네트워크 장애로 오인하지 않도록 회귀 검사를 추가했다.
 - 예약/수동 연구 감사는 별도 집계하며 전체 경기 지표는 예약 원본 우선, 게임별 최초 원본으로 계산한다. 원본·심사가 없는 캐시 성적도 제외한다.
 - 전체 133개 테스트가 PostgreSQL·PyTorch 포함 환경에서 통과했다. 이후 캐시 만료/해시 및 감사 집계 회귀를 추가해 별도로 재검사했다.
+
+## 최종 검증 기록
+
+- PostgreSQL와 PyTorch를 포함한 최종 전체 테스트: **135 passed**, 건너뜀 없음. Starlette/LightGBM 의존성 경고 91개, assertion 실패 없음. 마지막 메타데이터 보존 보완 후 관련 25개 검사도 통과했다.
+- 공식 캐시 복구를 포함한 외부 preview 실행 [43047885918](https://github.com/ppkuk0416/sporton-data/actions/runs/43047885918) 성공. **10경기 공식 캐시·실시간 ESPN 팀/시각 일치**, 사전 시나리오 10/10, 최근 이력·효율 20/20팀. `COMPLETED_PARTIAL`을 유지했다.
+- 이 검증은 Telegram 추가 전송 없이 수행했고 예약 키를 소모하지 않았음을 실제 DB에서 확인했다. 앞선 외부 수동 전송은 성공했다.
+- 헤더도 ‘공식 실시간/공식 캐시/실제 충돌’을 나눠 표시해, 실시간 공급원 장애를 전 경기 불일치로 읽지 않도록 했다.
+- 검증 원본: [실데이터/DB/복원](validation/nba-quality-real-validation.json), [실제 외부 전송](validation/nba-quality-external-run.json), [공식 캐시 외부 검증](validation/nba-quality-cache-external-run.json).

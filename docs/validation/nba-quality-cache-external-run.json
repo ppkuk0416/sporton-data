@@ -1,0 +1,15 @@
+{
+  "workflow_run": 43047885918,
+  "status": "success",
+  "mode": "preview_no_delivery",
+  "official_cached_matches": 10,
+  "latest_report_header": [
+    "# SPORTON NBA 분석 · 2026-11-12 (목요일)",
+    "## 1. 운영 상태",
+    "예정: 2026-11-12T06:30:00+09:00 / 실제 생성: 2026-11-12T00:24:42.933561+09:00",
+    "실행 구분: workflow_dispatch / 전체 10경기, 시작 전 10, 사전 수치 생성 10/10",
+    "최근 전력 이력 20/20팀; 효율 기록 20/20팀; 공식 일정 일치 0/10경기",
+    "분석 상태: COMPLETED_PARTIAL · 연구 기준선과 검증 모델을 구분함"
+  ],
+  "scheduled_slot_consumed": false
+}
