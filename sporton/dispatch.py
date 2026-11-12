@@ -376,6 +376,10 @@ def run(store,target=None,now=None,dry_run=False,origin=None):
     if origin=='schedule' and now>scheduled+timedelta(minutes=15) and not receipt and not timely_started:
         job_event(store,job_id,'MISSED_SCHEDULE','delayed_scheduled_invocation',scheduled_for=scheduled.isoformat(),actual=now.isoformat(),
             note='Observed delayed invocation; not proof that an earlier independent run failed.')
+        alert_key='missed-schedule-alert:'+str(target)
+        if not dry_run and not store.get('briefing_events',alert_key):
+            alert(store,f'SPORTON 예약 지연: {target} 06:30 KST 작업이 {now.astimezone(KST):%H:%M}에 시작됐습니다. 지금 복구하며 이미 시작한 경기는 사전 예측에서 제외합니다.')
+            store.append('briefing_events',alert_key,{'action':'missed_schedule_alert_attempted','at':utcnow().isoformat()},idempotent=True)
     job_event(store,job_id,'RUNNING','execution_started',origin=origin)
     try:
         result=_run(store,target,now,dry_run,job_id,origin)
@@ -415,12 +419,30 @@ def daemon(store,start_date=None):
             clock.sleep(20)
 
 
+def wait_for_schedule(store,scheduled_for=None,now_fn=None,sleep_fn=None):
+    """Pre-start the runner hours early, then use its own clock for 06:30 KST."""
+    now_fn=now_fn or utcnow;sleep_fn=sleep_fn or clock.sleep
+    now=now_fn();target=scheduled_for or datetime.combine(now.astimezone(KST).date(),time(6,30),KST)
+    if (target-now).total_seconds()>5.75*3600:raise ValueError('Warm start exceeds safe GitHub runner lifetime')
+    jid=str(uuid4());job_event(store,jid,'SCHEDULED','runner_clock_armed',scheduled_for=target.isoformat(),actual=now.isoformat())
+    if store.get('briefing_events','telegram:sent:nba-daily-v2-'+str(target.astimezone(KST).date())):return target.astimezone(KST).date()
+    while True:
+        remaining=(target-now_fn()).total_seconds()
+        if remaining<=0:break
+        job_event(store,jid,'SCHEDULED','runner_clock_waiting',seconds_remaining=round(remaining))
+        sleep_fn(min(60,remaining))
+    job_event(store,jid,'RUNNING','runner_clock_ready',scheduled_for=target.isoformat(),actual=now_fn().isoformat())
+    return target.astimezone(KST).date()
+
+
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--daemon',action='store_true');parser.add_argument('--dry-run',action='store_true');parser.add_argument('--date',type=date.fromisoformat)
+    parser=argparse.ArgumentParser();parser.add_argument('--daemon',action='store_true');parser.add_argument('--dry-run',action='store_true');parser.add_argument('--date',type=date.fromisoformat);parser.add_argument('--wait-for-schedule',action='store_true')
     args=parser.parse_args();s=Store()
     try:
         if args.daemon:daemon(s,args.date)
-        else:print(json.dumps(run(s,args.date,dry_run=args.dry_run),ensure_ascii=False))
+        else:
+            target=wait_for_schedule(s) if args.wait_for_schedule else args.date
+            print(json.dumps(run(s,target,dry_run=args.dry_run),ensure_ascii=False))
     except Exception:
         if not args.dry_run:alert(s,'SPORTON: NBA 보고서 자동 실행에 실패했습니다. 저장된 기록으로 재시도하며, 분석 완료로 표시하지 않습니다.')
         raise SystemExit('NBA dispatch failed; see redacted source_failures/briefing_events') from None

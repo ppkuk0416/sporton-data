@@ -9,6 +9,11 @@ from sporton.contracts import utcnow
 from test_dispatch import event,games
 
 
+@pytest.fixture(autouse=True)
+def no_live_dispatch_alerts(monkeypatch):
+    monkeypatch.setattr(dispatch,'alert',lambda *args:None)
+
+
 def fixture_events():return json.loads((Path(__file__).parent/'fixtures/nba_20261110.json').read_text())['events']
 
 
@@ -203,3 +208,28 @@ def test_cached_audits_require_original_and_do_not_pool_manual_scheduled(store):
     result=audit_predictions(store,no_network,now)
     assert result['n']==1 and result['all_evaluation_count']==2 and result['main_scope']=='SCHEDULED_OBSERVATION'
     assert result['observation_groups']['MANUAL_OBSERVATION']['n']==1 and result['official_priced_n']==0
+
+
+def test_warmed_runner_uses_clock_not_trigger_time(store):
+    now=datetime(2026,11,12,5,30,tzinfo=dispatch.KST);target=now.replace(hour=6,minute=30)
+    state=[now];waits=[]
+    def sleep(seconds):waits.append(seconds);state[0]+=timedelta(seconds=seconds)
+    assert dispatch.wait_for_schedule(store,target,now_fn=lambda:state[0],sleep_fn=sleep)==date(2026,11,12)
+    assert state[0]==target and max(waits)<=60
+    assert store.rows('job_executions')[-1]['payload']['phase']=='runner_clock_ready'
+
+
+def test_warm_runner_does_not_wait_for_tomorrow_if_late(store):
+    now=datetime(2026,11,12,8,tzinfo=dispatch.KST);target=now.replace(hour=6,minute=30)
+    assert dispatch.wait_for_schedule(store,target,now_fn=lambda:now,sleep_fn=lambda _:pytest.fail('late must recover now'))==date(2026,11,12)
+    with pytest.raises(ValueError,match='runner lifetime'):dispatch.wait_for_schedule(store,target+timedelta(days=1),now_fn=lambda:now)
+
+
+def test_missed_schedule_alert_is_once_per_day(store,monkeypatch):
+    now=datetime(2026,11,12,8,tzinfo=dispatch.KST);calls=[]
+    monkeypatch.setattr(dispatch,'utcnow',lambda:now)
+    monkeypatch.setattr(dispatch,'collect',lambda *a:([],[]))
+    monkeypatch.setattr(dispatch,'settings',lambda:('TEST','123'))
+    monkeypatch.setattr(dispatch,'alert',lambda s,m:calls.append(m))
+    dispatch.run(store,now=now,origin='schedule');dispatch.run(store,now=now,origin='schedule')
+    assert len(calls)==1 and '06:30' in calls[0]

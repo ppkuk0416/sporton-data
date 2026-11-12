@@ -1,6 +1,8 @@
 name: NBA daily Telegram
 on:
   schedule:
+    # KST 01:00 warm start, wait on the runner's clock until 06:30.
+    - cron: '0 16 * * *'
     # KST 06:30 primary; 06:40/06:50/07:00 explicit late recovery.
     - cron: '30,40,50 21 * * *'
     - cron: '0 22 * * *'
@@ -20,8 +22,9 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 360
     env:
+      SPORTON_CRON_EXPRESSION: ${{ github.event.schedule }}
       SPORTON_DISPATCH_MODE: ${{ inputs.mode }}
       SPORTON_HOME: var/dispatch
       SPORTON_TELEGRAM_BOT_TOKEN: ${{ secrets.SPORTON_TELEGRAM_BOT_TOKEN }}
