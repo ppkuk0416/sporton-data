@@ -103,8 +103,11 @@ def deliver(store,record,client=None):
         from datetime import datetime
         if (utcnow()-datetime.fromisoformat(failures[-1]['payload']['at'])).total_seconds()<300:return {'status':'retry_wait'}
     try:
-        result=api(config[0],'sendDocument',data={'chat_id':config[1],'caption':'SPORTON 데일리 브리핑 · '+record['id']},
-            files={'document':('sporton-'+record['id']+'.md',record['markdown'].encode('utf-8'),'text/plain')},client=client)
+        is_html=bool(record.get('html_document'))
+        document=('sporton-'+record['id']+('.html' if is_html else '.md'),
+            (record['html_document'] if is_html else record['markdown']).encode('utf-8'),'text/html' if is_html else 'text/plain')
+        result=api(config[0],'sendDocument',data={'chat_id':config[1],'caption':record.get('telegram_caption') or 'SPORTON 데일리 브리핑 · '+record['id']},
+            files={'document':document},client=client)
     except TelegramError as exc:
         store.append('briefing_events',str(uuid4()),{'action':'telegram_failed','briefing_id':record['id'],'at':utcnow().isoformat(),'error':str(exc),'delivery_uncertain':True})
         return {'status':'failed'}

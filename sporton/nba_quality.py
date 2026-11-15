@@ -194,7 +194,7 @@ def save_predictions(store,rows,report_id,generated_at,conn=None,origin="manual"
         if not row.get('baseline_scores_away_home') or row.get('review',{}).get('verdict')!='PASS':continue
         if dt(row['starts_at'])<=dt(generated_at):continue
         p={'kind':'daily_research_prediction','game_id':row['id'],'report_id':report_id,'created_at':generated_at,'starts_at':row['starts_at'],
-            'scores':row['baseline_scores_away_home'],'model_version':row.get('model_version'),'feature_snapshot_id':row.get('feature_snapshot_id'),'market_snapshot_id':row.get('market_snapshot_id'),
+            'scores':row['baseline_scores_away_home'],'away':row['away'],'home':row['home'],'model_version':row.get('model_version'),'feature_snapshot_id':row.get('feature_snapshot_id'),'market_snapshot_id':row.get('market_snapshot_id'),
             'review_id':'review:'+row['prediction_id'],'recommendation_status':row.get('recommendation_status','WATCH'),'market':row['market'],'selection_class':'SCHEDULED_OBSERVATION' if origin=='schedule' else 'MANUAL_OBSERVATION',
             'quarter_scores':row.get('quarter_scores'),'half_scores':row.get('half_scores'),'analysis_hash':digest(row)}
         store.append('forecast_components',row['prediction_id'],p,idempotent=True,conn=conn)
@@ -211,13 +211,18 @@ def grade(p,r):
     total_grade=None if total is None or abs(a+h-total)<1e-9 else settlement((ap+hp-total)*(1 if a+h-total>0 else -1))
     segments=None
     if p.get('quarter_scores') and r.get('home_periods') and len(p['quarter_scores'])<=min(len(r['home_periods']),len(r['away_periods'])):
-        segments=[{'period':i+1,'team_mae':(abs(q[0]-r['away_periods'][i])+abs(q[1]-r['home_periods'][i]))/2,
+        segments=[{'period':i+1,'predicted_scores':q,'actual_scores':[r['away_periods'][i],r['home_periods'][i]],'team_mae':(abs(q[0]-r['away_periods'][i])+abs(q[1]-r['home_periods'][i]))/2,
             'margin_mae':abs((q[1]-q[0])-(r['home_periods'][i]-r['away_periods'][i])),
             'total_mae':abs(sum(q)-r['home_periods'][i]-r['away_periods'][i])} for i,q in enumerate(p['quarter_scores'])]
-    return {'prediction_id':p.get('prediction_id'),'prediction_created_at':p['created_at'],'game_id':p['game_id'],'actual_scores':[ap,hp],'predicted_scores':[a,h],
+    half=None
+    if p.get('half_scores') and len(r.get('home_periods',[]))>=2 and len(r.get('away_periods',[]))>=2:
+        q=p['half_scores'];actual_half=[sum(r['away_periods'][:2]),sum(r['home_periods'][:2])]
+        half={'predicted_scores':q,'actual_scores':actual_half,'team_mae':sum(abs(q[i]-actual_half[i]) for i in (0,1))/2,
+            'margin_mae':abs((q[1]-q[0])-(actual_half[1]-actual_half[0])),'total_mae':abs(sum(q)-sum(actual_half))}
+    return {'prediction_id':p.get('prediction_id'),'prediction_created_at':p['created_at'],'report_id':p.get('report_id'),'away_name':p.get('away'),'home_name':p.get('home'),'model_version':p.get('model_version'),'game_id':p['game_id'],'actual_scores':[ap,hp],'predicted_scores':[a,h],
         'direction_correct':None if abs(margin)<1e-9 else (margin>0)==(actual>0),'spread':spread,'total':total_grade,
         'team_mae':(abs(a-ap)+abs(h-hp))/2,'margin_mae':abs(margin-actual),'total_mae':abs(a+h-ap-hp),
-        'selection_class':p.get('selection_class','OBSERVATION'),'roi':None,'segment_metrics':segments,'away_score_error':a-ap,'home_score_error':h-hp,'result_grade':r['source_grade']}
+        'selection_class':p.get('selection_class','OBSERVATION'),'roi':None,'segment_metrics':segments,'half_metrics':half,'away_score_error':a-ap,'home_score_error':h-hp,'result_grade':r['source_grade']}
 
 
 def audit_predictions(store,fetch,now):
@@ -234,14 +239,15 @@ def audit_predictions(store,fetch,now):
             review=store.get('critical_reviews',p.get('review_id'))
             if not source_row or digest(source_row)!=p.get('analysis_hash') or not review or review['verdict']!='PASS' or review['report_hash']!=p['analysis_hash']:
                 excluded.append(row['id']);continue
-            if old:out.append(old['evaluation']);continue
+            if old:
+                out.append({**old['evaluation'],'report_id':p['report_id'],'away_name':source_row.get('away'),'home_name':source_row.get('home'),'model_version':p.get('model_version')});continue
             gid=p['game_id']
             if gid not in cache:cache[gid]=fetch(store,'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event='+gid)
             summary=cache[gid];e=summary.get('header',{});competitions=e.get('competitions',[])
             if not competitions:continue
             result=final_result({'id':gid,'date':p['starts_at'],'competitions':competitions})
             if not result:continue
-            evaluation=grade({**p,'prediction_id':row['id']},result)
+            evaluation=grade({**p,'prediction_id':row['id'],'away':source_row.get('away'),'home':source_row.get('home')},result)
             with store.transaction() as c:
                 store.append('settlement_events',key,{'kind':'daily_research_audit','evaluation':evaluation,'result':result,'at':utcnow().isoformat()},conn=c)
                 store.append('learning_feedback',key,{'kind':'error_hypothesis','prediction_id':row['id'],'margin_error':evaluation['margin_mae'],'total_error':evaluation['total_mae'],
@@ -249,6 +255,7 @@ def audit_predictions(store,fetch,now):
             out.append(evaluation)
         except (ValueError,KeyError,TypeError):continue
     scopes={scope:{'n':sum(e['selection_class']==scope for e in out),'direction_n':sum(e['selection_class']==scope and e['direction_correct'] is not None for e in out),'direction_wins':sum(e['selection_class']==scope and e['direction_correct'] is True for e in out)} for scope in {e['selection_class'] for e in out}}
+    all_records=list(out)
     all_count=len(out)
     main_scope='SCHEDULED_OBSERVATION' if any(e['selection_class']=='SCHEDULED_OBSERVATION' for e in out) else 'MANUAL_OBSERVATION' if any(e['selection_class']=='MANUAL_OBSERVATION' for e in out) else 'OBSERVATION'
     first_by_game={}
@@ -256,7 +263,7 @@ def audit_predictions(store,fetch,now):
         if e['selection_class']==main_scope:first_by_game.setdefault(e['game_id'],e)
     out=list(first_by_game.values())
     resolved=[e for e in out if e['direction_correct'] is not None]
-    return {'n':len(out),'main_scope':main_scope,'all_evaluation_count':all_count,'direction_n':len(resolved),'direction_wins':sum(e['direction_correct'] for e in resolved),
+    return {'evaluations':out,'all_evaluations':all_records,'n':len(out),'main_scope':main_scope,'all_evaluation_count':all_count,'direction_n':len(resolved),'direction_wins':sum(e['direction_correct'] for e in resolved),
         'accuracy':sum(e['direction_correct'] for e in resolved)/len(resolved) if resolved else None,
         'team_mae':statistics.mean(e['team_mae'] for e in out) if out else None,'margin_mae':statistics.mean(e['margin_mae'] for e in out) if out else None,
         'total_mae':statistics.mean(e['total_mae'] for e in out) if out else None,'worst_three':sorted(out,key=lambda e:e['margin_mae'],reverse=True)[:3],

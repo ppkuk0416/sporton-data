@@ -190,15 +190,20 @@ def collect(store,target,now):
     return rows,issues
 
 
-def prior_audit(store,now):
+def prior_audit(store,now,target=None):
     from .nba_quality import audit_predictions
     reports=store.rows('professional_reports');briefings=store.rows('briefings')
-    prior=[r for r in reports if r['payload'].get('content',{}).get('date_kst','9999')<str(now.astimezone(KST).date())]
+    target=target or now.astimezone(KST).date()
+    prior=[r for r in reports if r['payload'].get('content',{}).get('date_kst','9999')<str(target)]
     from .engine import audit as audit_verified_predictions
     from .analytics import audit_result_corrections
     verified_added=audit_verified_predictions(store);audit_result_corrections(store)
     audit=audit_predictions(store,fetch,now)
     audit['new_verified_audits']=len(verified_added)
+    from .daily_picks import audit_top_picks
+    audit['top_pick_audit']=audit_top_picks(store,fetch,now,target)
+    candidates=[r for r in prior if any(e.get('report_id')==r['id'] for e in audit.get('all_evaluations',[]))]
+    audit['game_reference_report_id']=max(candidates,key=lambda r:r['created_at'])['id'] if candidates else None
     from .nba_quality import learning_cycle
     audit['learning_gate']=learning_cycle(store,now)
     research=[r['payload'] for r in store.rows('training_runs') if r['payload'].get('kind')=='NBA_RETROSPECTIVE_COMPARISON']
@@ -224,7 +229,7 @@ def top_watch(rows):
     return sorted(eligible,key=lambda r:r['scenario_gap'],reverse=True)[:3]
 
 
-def render(target,now,rows,issues,audit,run_state=None,origin=None):
+def render_technical_v2(target,now,rows,issues,audit,run_state=None,origin=None):
     scheduled=datetime.combine(target,time(6,30),KST)
     pre=[r for r in rows if not r['already_started']];valid=[r for r in pre if r.get('baseline_scores_away_home')]
     lines=[f'# SPORTON NBA 분석 · {target} ({["월","화","수","목","금","토","일"][target.weekday()]}요일)',
@@ -292,6 +297,11 @@ def render(target,now,rows,issues,audit,run_state=None,origin=None):
     return '\n'.join(lines)
 
 
+def render(target,now,rows,issues,audit,run_state=None,origin=None,picks=None,diagnostics=None):
+    from .nba_report import render_daily
+    return render_daily(target,now,rows,issues,audit,run_state,origin,picks,diagnostics)
+
+
 def alert(store,message):
     config=settings()
     if not config:return
@@ -321,7 +331,7 @@ def _run(store,target,now,dry_run,job_id,origin):
             job_event(store,job_id,'RUNNING','collection_started')
             rows,issues=collect(store,target,now)
             job_event(store,job_id,'RUNNING','collection_completed',games=len(rows),issues=len(issues))
-            audit=prior_audit(store,utcnow())
+            audit=prior_audit(store,utcnow(),target)
             # Collection may cross tipoff. Recheck the actual save clock, not the requested clock.
             generated=utcnow()
             for r in rows:
@@ -336,11 +346,13 @@ def _run(store,target,now,dry_run,job_id,origin):
             if not rows and not dry_run:
                 job_event(store,job_id,'COMPLETED','no_games_no_notification')
                 return {'status':'no_games','date_kst':str(target)}
-            markdown=render(target,generated,rows,issues,audit,run_state=state,origin=origin)
-            markdown+='\n\n보고서 실행 ID: '+job_id+' / 원본 ID: '+key+' / 저장 시 검증할 SHA256: '+digest({'games':rows,'as_of':generated.isoformat()})
+            from .daily_picks import select_picks
+            picks=select_picks(rows,generated,store)
+            diagnostic='보고서 실행 ID: '+job_id+' / 원본 ID: '+key+' / 저장 시 검증할 SHA256: '+digest({'games':rows,'as_of':generated.isoformat()})
+            markdown=render(target,generated,rows,issues,audit,run_state=state,origin=origin,picks=picks,diagnostics=[diagnostic])
             content={'dispatcher_version':VERSION,'date_kst':str(target),'as_of':generated.isoformat(),'origin':origin,'job_id':job_id,
                 'run_state':state,'scheduled_for':datetime.combine(target,time(6,30),KST).isoformat(),
-                'games':rows,'issues':issues,'audit':audit,'top_watch':top_watch(rows),'markdown':markdown}
+                'games':rows,'issues':issues,'audit':audit,'top_watch':top_watch(rows),'top_picks':picks,'report_format_version':'reader-v2','markdown':markdown}
             job_event(store,job_id,'RUNNING','analysis_completed',result_state=state,pregame_count=len(pre),analysis_count=len(valid))
             from .governance import register_report
             if not dry_run:
@@ -349,10 +361,21 @@ def _run(store,target,now,dry_run,job_id,origin):
                     store.append('briefings',key,{'id':key,'generated_at':generated.isoformat(),'scheduled_for':content['scheduled_for'],
                         'data_mode':'real','snapshot':content,'markdown':markdown,'research_report_id':rid},conn=conn)
                     save_predictions(store,rows,rid,generated.isoformat(),conn,origin=origin)
+                    from .daily_picks import save_picks
+                    save_picks(store,picks,rid,key,utcnow().isoformat(),conn)
                 job_event(store,job_id,'RUNNING','report_stored',report_id=rid,content_hash=digest(content))
             record={'id':key,'data_mode':'real','markdown':markdown}
         directory=home()/'daily-reports';directory.mkdir(exist_ok=True)
         path=directory/(str(target)+('-preview' if dry_run else '')+'.md');path.write_text(record['markdown'])
+        from .nba_report import to_html,telegram_summary
+        original_path=directory/(record['id']+('-preview' if dry_run else '')+'.md')
+        if original_path.exists() and original_path.read_text()!=record['markdown']:
+            if not dry_run:raise ValueError('immutable report file differs from stored original')
+        original_path.write_text(record['markdown'])
+        html_path=original_path.with_suffix('.html');html_text=to_html(record['markdown']);html_path.write_text(html_text)
+        if content.get('report_format_version') in ('reader-v1','reader-v2'):
+            record['html_document']=html_text
+            record['telegram_caption']=telegram_summary(target,parse_time(content['as_of']),content['games'],content['top_picks'],content['audit'].get('top_pick_audit',{}))
         if dry_run:return {'status':'preview','report':str(path),'run_state':content['run_state']}
         if content['run_state']=='FAILED':raise ValueError('All pregame analyses lack minimum evidence; partial failure recorded, no normal report sent')
         result=deliver(store,record)

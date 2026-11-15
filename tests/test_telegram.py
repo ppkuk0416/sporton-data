@@ -124,3 +124,19 @@ def test_environment_secret_setup_does_not_prompt_or_persist_token(store,monkeyp
     assert settings()==('123456:TEST_ENV_SECRET','123')
     monkeypatch.delenv('SPORTON_TELEGRAM_BOT_TOKEN')
     with pytest.raises(TelegramError,match='not available'):settings()
+
+
+def test_reader_html_delivery_preserves_caption_and_dedup(store,tmp_path,monkeypatch):
+    configure(tmp_path,monkeypatch)
+    r={**record(),'html_document':'<!doctype html><html lang="ko"><body>TEST 보고서</body></html>','telegram_caption':'TEST TOP 1 · 관찰 픽'}
+    calls=[]
+    def respond(req):
+        calls.append(req)
+        assert b'text/html' in req.content and b'.html' in req.content
+        assert r['html_document'].encode() in req.content
+        assert r['telegram_caption'].encode() in req.content
+        return httpx.Response(200,json={'ok':True,'result':{'message_id':456}})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        assert deliver(store,r,client)['status']=='sent'
+        assert deliver(store,r,client)['status']=='already_sent'
+    assert len(calls)==1
