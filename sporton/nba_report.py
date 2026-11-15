@@ -260,7 +260,7 @@ def render_daily(target,now,rows,issues,audit,run_state=None,origin=None,picks=N
     if len(picks)<3:lines.append(f'현재 자료로 추천할 수 있는 선택은 {len(picks)}개입니다. 시작 전 경기나 근거가 부족한 자리를 가상의 픽으로 채우지는 않았습니다.')
     lines+=['신뢰도는 판단의 강도를 뜻하며 검증된 적중 확률은 아닙니다. 다음 보고서에서 아래 선택을 같은 기준점으로 각각 채점하겠습니다.','']
     lines+=_pick_cards(picks)
-    return '\n'.join(lines)+'\n'
+    return '\n'.join(lines).rstrip()+'\n'
 
 
 def to_html(markdown,title='SPORTON NBA 보고서'):
