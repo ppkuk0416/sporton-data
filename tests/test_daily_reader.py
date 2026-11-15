@@ -218,3 +218,17 @@ def test_telegram_summary_keeps_all_three_labels_and_previous_score():
     caption=telegram_summary(now.date(),now,[],ps,top)
     assert '3개 중 1개 적중' in caption and '1개 미적중' in caption and '1개 무승부' in caption
     assert all(p['label'] in caption for p in ps) and len(caption.encode('utf-16-le'))//2<=1024
+
+
+@pytest.mark.parametrize('key',['value','displayValue'])
+def test_summary_final_with_both_period_schemas_settles_frozen_picks(store,key):
+    from sporton.nba_quality import final_result
+    now=utcnow();_,ps=freeze(store,now,[row(now)])
+    body=result_fetch(100,106)()
+    competitors=body['header']['competitions'][0]['competitors']
+    competitors[0]['linescores']=[{key:str(v)} for v in [25,25,25,25]]
+    competitors[1]['linescores']=[{key:str(v)} for v in [26,27,26,27]]
+    result=final_result({'id':'TEST-GAME','date':ps[0]['starts_at'],'competitions':body['header']['competitions']})
+    assert result['away_periods']==[25,25,25,25] and result['home_periods']==[26,27,26,27]
+    a=audit_top_picks(store,lambda *args:body,now+timedelta(days=1),now.astimezone(dispatch.KST).date()+timedelta(days=1))
+    assert a['records'][0]['status']=='W' and a['groups']['OBSERVATION']['wins']==1

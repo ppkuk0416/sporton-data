@@ -43,8 +43,8 @@ def final_result(e):
     h,a=teams(e);hp,ap=number(h['score']),number(a['score'])
     if hp==ap:raise ValueError('NBA final cannot tie')
     return {'id':str(e['id']),'date':e['date'],'home_id':str(h['id']),'away_id':str(a['id']),
-        'home_score':hp,'away_score':ap,'home_periods':[number(x.get('value')) for x in h.get('linescores',[])],
-        'away_periods':[number(x.get('value')) for x in a.get('linescores',[])],
+        'home_score':hp,'away_score':ap,'home_periods':[number(x) for x in h.get('linescores',[])],
+        'away_periods':[number(x) for x in a.get('linescores',[])],
         'status':'FINAL','source_grade':'SOURCE_OBSERVED','published_at':None}
 
 
