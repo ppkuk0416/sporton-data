@@ -25,6 +25,12 @@ from .telegram import deliver,settings,api,TelegramError
 KST=ZoneInfo('Asia/Seoul')
 ESPN='https://site.api.espn.com/apis/site/v2/sports/basketball/nba/'
 STOP=False
+# GitHub runners are killed at 6h; leave room for restore, install, collection and upload.
+MAX_WARM_WAIT=timedelta(hours=5,minutes=45)
+
+
+class TooEarly(ValueError):
+    """A (possibly delayed) trigger fired too long before the next 06:30 KST slot."""
 
 
 @contextmanager
@@ -390,7 +396,8 @@ def run(store,target=None,now=None,dry_run=False,origin=None):
     now=now or utcnow();target=target or now.astimezone(KST).date();origin=origin or os.getenv('GITHUB_EVENT_NAME','manual')
     job_id=str(uuid4());scheduled=datetime.combine(target,time(6,30),KST)
     job_event(store,job_id,'SCHEDULED','created',scheduled_for=scheduled.isoformat(),origin=origin,dry_run=dry_run)
-    receipt=store.get('briefing_events','telegram:sent:nba-daily-v2-'+str(target))
+    from .nba_quality import VERSION
+    receipt=store.get('briefing_events','telegram:sent:'+VERSION+'-'+str(target))
     previous_jobs=store.rows('job_executions')
     timely_ids={r['payload']['job_id'] for r in previous_jobs if r['payload'].get('phase')=='created'
         and r['payload'].get('origin')=='schedule' and r['payload'].get('scheduled_for')==scheduled.isoformat()
@@ -445,10 +452,12 @@ def daemon(store,start_date=None):
 def wait_for_schedule(store,scheduled_for=None,now_fn=None,sleep_fn=None):
     """Pre-start the runner hours early, then use its own clock for 06:30 KST."""
     now_fn=now_fn or utcnow;sleep_fn=sleep_fn or clock.sleep
+    from .nba_quality import VERSION
     now=now_fn();target=scheduled_for or datetime.combine(now.astimezone(KST).date(),time(6,30),KST)
-    if (target-now).total_seconds()>5.75*3600:raise ValueError('Warm start exceeds safe GitHub runner lifetime')
+    if target-now>MAX_WARM_WAIT:
+        raise TooEarly('Warm start exceeds safe GitHub runner lifetime; next slot '+target.isoformat())
     jid=str(uuid4());job_event(store,jid,'SCHEDULED','runner_clock_armed',scheduled_for=target.isoformat(),actual=now.isoformat())
-    if store.get('briefing_events','telegram:sent:nba-daily-v2-'+str(target.astimezone(KST).date())):return target.astimezone(KST).date()
+    if store.get('briefing_events','telegram:sent:'+VERSION+'-'+str(target.astimezone(KST).date())):return target.astimezone(KST).date()
     while True:
         remaining=(target-now_fn()).total_seconds()
         if remaining<=0:break
@@ -464,8 +473,13 @@ def main():
     try:
         if args.daemon:daemon(s,args.date)
         else:
-            target=wait_for_schedule(s) if args.wait_for_schedule else args.date
-            print(json.dumps(run(s,target,dry_run=args.dry_run),ensure_ascii=False))
+            try:target=wait_for_schedule(s) if args.wait_for_schedule else args.date
+            except TooEarly as exc:
+                # A delayed trigger from yesterday's slot that landed after KST midnight. Not a failure:
+                # sending now would deliver today's report hours before odds/injuries settle.
+                print(json.dumps({'status':'skipped_too_early','reason':str(exc)},ensure_ascii=False))
+                return
+            print(json.dumps(run(s,target,dry_run=args.dry_run,origin=os.getenv('SPORTON_DISPATCH_ORIGIN') or None),ensure_ascii=False))
     except Exception:
         if not args.dry_run:alert(s,'SPORTON: NBA 보고서 자동 실행에 실패했습니다. 저장된 기록으로 재시도하며, 분석 완료로 표시하지 않습니다.')
         raise SystemExit('NBA dispatch failed; see redacted source_failures/briefing_events') from None
