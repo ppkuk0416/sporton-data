@@ -65,7 +65,7 @@ def fetch(store,url):
             if attempt<2:clock.sleep(2**attempt)
             continue
         payload={'source_url':url,'collected_at':utcnow().isoformat(),'body':body,'schema_validated':True}
-        store.append('raw_data',digest(payload),payload)
+        store.append_source(payload)
         return body
     store.append('source_failures',str(uuid4()),{'source_url':url,'at':utcnow().isoformat(),'error':error,'status':'SOURCE_UNAVAILABLE','attempts':3})
     age=timedelta(hours=24 if '/schedule?' in url else 1)

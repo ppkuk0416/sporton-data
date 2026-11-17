@@ -94,7 +94,7 @@ def collect_nba(store, seasons):
             if not sets or not sets[0].get('rowSet'):
                 raise ValueError('NBA returned no games')
             payload = {'source':'NBA official LeagueGameLog','source_id':str(response.url),'season':season,'collected_at':utcnow().isoformat(),'quality':'timestamp_unknown','body':body}
-            store.append('raw_data', digest(payload), payload)
+            store.append_source(payload)
             results.append({'season':season,'team_game_rows':len(sets[0]['rowSet']),'status':'raw_only'})
         except Exception as exc:
             failure = {'season':season,'source':url,'error':str(exc),'at':utcnow().isoformat()}

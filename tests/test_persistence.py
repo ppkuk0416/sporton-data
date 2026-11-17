@@ -145,3 +145,20 @@ def test_failed_restore_has_backoff_and_is_not_verified(store,tmp_path):
     r=periodic(store,p)
     assert r['status']=='blocked_after_failed_restore'
     assert not status(store,p)['latest_backup_restore_verified']
+
+
+def test_identical_source_bodies_are_stored_once_and_hydrated(store):
+    body={'header':{'competitions':[{'id':'1'}]},'big':'x'*1000}
+    url='https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event=1'
+    store.append_source({'source_url':url,'collected_at':'2026-11-17T00:00:00+00:00','body':body})
+    store.append_source({'source_url':url,'collected_at':'2026-11-17T01:00:00+00:00','body':body})
+    assert len(store.rows('raw_data'))==2 and len(store.rows('raw_bodies'))==1
+    assert all('body' not in r['payload'] for r in store.rows('raw_data'))
+    latest=store.latest_source(url)['payload']
+    assert latest['body']==body and latest['collected_at'].startswith('2026-11-17T01')
+
+
+def test_legacy_inline_body_rows_still_read(store):
+    url='https://example.test/legacy'
+    store.append('raw_data','LEGACY',{'source_url':url,'collected_at':'2026-11-10T00:00:00+00:00','body':{'events':[]}})
+    assert store.latest_source(url)['payload']['body']=={'events':[]}
