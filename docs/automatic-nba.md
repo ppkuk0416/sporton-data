@@ -99,3 +99,45 @@ GitHub repository secrets 등록 후 외부 runner에서 실행했다.
 ## 품질 개선 v2
 
 [원인·수정·A–I 회귀·실데이터·모델·복원 검증](nba-quality-repair.md). v1의 실행 증거는 이력으로 유지한다. 현재 예약은 06:30/06:40/06:50/07:00 KST이며 수동 실행 키는 예약과 별도다.
+
+
+## 예약 신뢰성 수정 · 2026-11-17
+
+### 실제 관측 (11-12 ~ 11-17)
+
+하루 5개 cron 중 실제로 발동한 것은 1–3개였고 모두 3–8시간 늦었다. 06:30 KST
+cron(UTC 21:30)은 정시에 한 번도 발동하지 않았다. 예: 11-17은 UTC 16:00 warm start가
+**KST 09:01**에 발동해 09:03에 전송했고, 나머지 4개 cron은 아예 발동하지 않았다.
+
+warm start 실행에 `--wait-for-schedule`이 전달되지 않아 06:30을 기다리지 않고 즉시
+보냈다. 그래서 날마다 05:29, 05:52(06:30 전, 시장선·부상 정보 미확정)이나 09:01(늦음)처럼
+들쭉날쭉하게 도착했다.
+
+### 수정
+
+- 예약 실행(`schedule`, 또는 `mode=scheduled` 수동/외부 실행)은 항상 `--wait-for-schedule`로
+  돌린다. 06:30 전이면 runner 자체 시계로 기다리고, 늦었으면 바로 복구한다.
+- KST 자정 이후로 밀린 전날 트리거는 `skipped_too_early`로 정상 종료한다. 다음날 보고서를
+  새벽에 미리 보내지 않으며 실패 알림도 보내지 않는다.
+- GitHub 혼잡 시각(:00/:30)을 피해 정각이 아닌 분에 cron 8개를 둔다. 하나라도 발동하면 된다.
+  concurrency 그룹이 대기 중인 실행을 1개로 줄이고, 날짜 영수증이 중복 전송을 막는다.
+
+### 데이터 누적 수정
+
+이전 복원 단계는 `gh run list --limit 30`의 for-루프였다. (1) 명령 치환이 실패해도 `-e`가
+걸리지 않고, (2) 최근 30개 실행에 artifact가 없으면(취소된 대기 실행 등) **빈 DB로 시작해
+업로드하면서 누적 이력이 끊길 수 있었다.** 지금은 artifacts API를 최신순으로 직접 조회하고,
+이 워크플로의 schedule/workflow_dispatch 실행인지 확인하며, 오류가 나면 단계를 실패시킨다.
+복원이 실패한 실행은 artifact를 업로드하지 않는다.
+
+### 정시 도착이 꼭 필요하면: 외부 스케줄러
+
+GitHub cron은 정시를 보장하지 않는다. cron-job.org 같은 외부 스케줄러가 매일 KST 06:20쯤
+아래 API를 호출하게 하면 된다(`mode=scheduled`는 cron과 같은 날짜 영수증을 쓰므로 중복 전송 없음).
+
+```
+POST https://api.github.com/repos/ppkuk0416/sporton-data/actions/workflows/nba-daily.yaml/dispatches
+Authorization: Bearer <이 저장소만 허용한 fine-grained PAT, Actions: Read and write>
+Accept: application/vnd.github+json
+{"ref":"main","inputs":{"mode":"scheduled"}}
+```

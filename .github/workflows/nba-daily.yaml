@@ -1,17 +1,24 @@
 name: NBA daily Telegram
 on:
   schedule:
-    # KST 01:00 warm start, wait on the runner's clock until 06:30.
-    - cron: '0 16 * * *'
-    # KST 06:30 primary; 06:40/06:50/07:00 explicit late recovery.
-    - cron: '30,40,50 21 * * *'
-    - cron: '0 22 * * *'
+    # GitHub delays scheduled runs by hours and silently drops some, worst on :00/:30.
+    # Observed 2026-11-12..17: of 5 daily crons only 1-3 fired, 3-8h late. So fire many
+    # off-peak triggers; each waits on the runner's own clock until 06:30 KST (max 5h45m),
+    # later ones recover immediately, and the date receipt prevents duplicate sends.
+    - cron: '47 15 * * *'   # KST 00:47
+    - cron: '23 17 * * *'   # KST 02:23
+    - cron: '11 19 * * *'   # KST 04:11
+    - cron: '37 20 * * *'   # KST 05:37
+    - cron: '17 21 * * *'   # KST 06:17
+    - cron: '43 21 * * *'   # KST 06:43 recovery
+    - cron: '19 22 * * *'   # KST 07:19 recovery
+    - cron: '13 23 * * *'   # KST 08:13 recovery
   workflow_dispatch:
     inputs:
       mode:
-        description: 'send report or validate without Telegram delivery'
+        description: 'scheduled = same as cron (external scheduler, one report per day); send = extra manual report; preview = no Telegram'
         type: choice
-        options: [send, preview]
+        options: [send, scheduled, preview]
         default: send
 permissions:
   contents: read
@@ -26,6 +33,7 @@ jobs:
     env:
       SPORTON_CRON_EXPRESSION: ${{ github.event.schedule }}
       SPORTON_DISPATCH_MODE: ${{ inputs.mode }}
+      SPORTON_DISPATCH_ORIGIN: ${{ (github.event_name == 'schedule' || inputs.mode == 'scheduled') && 'schedule' || '' }}
       SPORTON_HOME: var/dispatch
       SPORTON_TELEGRAM_BOT_TOKEN: ${{ secrets.SPORTON_TELEGRAM_BOT_TOKEN }}
       SPORTON_TELEGRAM_CHAT_ID: ${{ secrets.SPORTON_TELEGRAM_CHAT_ID }}
@@ -40,17 +48,37 @@ jobs:
           test -n "$SPORTON_TELEGRAM_BOT_TOKEN" || { echo 'Missing SPORTON_TELEGRAM_BOT_TOKEN repository secret'; exit 1; }
           test -n "$SPORTON_TELEGRAM_CHAT_ID" || { echo 'Missing SPORTON_TELEGRAM_CHAT_ID repository secret'; exit 1; }
       - name: Restore latest append-only state and delivery receipts
+        id: restore
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           mkdir -p var/dispatch
-          for previous_run in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow nba-daily.yaml --branch main --status completed --limit 30 --json databaseId,event --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | .databaseId'); do
-            artifact_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$previous_run/artifacts" --jq '.artifacts[] | select(.name == "nba-dispatch-state" and .expired == false) | .id')
-            if [ -n "$artifact_id" ]; then
-              gh run download "$previous_run" --repo "$GITHUB_REPOSITORY" --name nba-dispatch-state --dir var/dispatch
-              break
-            fi
-          done
+          # Query artifacts directly, newest first. Listing runs instead breaks once more than
+          # N recent runs were cancelled/queued without artifacts, and a failed `gh` inside a
+          # for-list substitution does not trip `-e`: both silently started from an EMPTY DB
+          # and the next upload overwrote the accumulated history.
+          candidates=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=nba-dispatch-state&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main")] | sort_by(.created_at) | reverse | .[] | "\(.workflow_run.id) \(.id)"')
+          restored=""
+          while read -r run_id artifact_id; do
+            [ -n "${run_id:-}" ] || continue
+            # Only trust state produced by this workflow's own scheduled/manual runs.
+            origin=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" --jq '"\(.path) \(.event)"')
+            case "$origin" in
+              ".github/workflows/nba-daily.yaml schedule"|".github/workflows/nba-daily.yaml workflow_dispatch") ;;
+              *) continue ;;
+            esac
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name nba-dispatch-state --dir var/dispatch
+            restored="$run_id"
+            break
+          done <<< "$candidates"
+          if [ -z "$restored" ]; then
+            echo "::warning::No previous nba-dispatch-state artifact found; starting with an empty database"
+          else
+            test -s var/dispatch/sporton.db || { echo "::error::Artifact from run $restored has no sporton.db"; exit 1; }
+            echo "Restored state from run $restored ($(du -h var/dispatch/sporton.db | cut -f1))"
+          fi
       - name: Install pinned runtime
         run: |
           pip install -r requirements.lock
@@ -59,11 +87,15 @@ jobs:
         run: |
           if [ "$SPORTON_DISPATCH_MODE" = preview ]; then
             python -m sporton.dispatch --dry-run
+          elif [ "$SPORTON_DISPATCH_ORIGIN" = schedule ]; then
+            # Early triggers wait for 06:30 KST; late ones run now; post-midnight strays skip.
+            python -m sporton.dispatch --wait-for-schedule
           else
             python -m sporton.dispatch
           fi
       - name: Preserve raw evidence, original reports and delivery receipts
-        if: always()
+        # Never publish a partially restored DB: it would become the "latest" state.
+        if: always() && steps.restore.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: nba-dispatch-state

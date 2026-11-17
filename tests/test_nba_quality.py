@@ -225,6 +225,30 @@ def test_warm_runner_does_not_wait_for_tomorrow_if_late(store):
     with pytest.raises(ValueError,match='runner lifetime'):dispatch.wait_for_schedule(store,target+timedelta(days=1),now_fn=lambda:now)
 
 
+def test_post_midnight_stray_trigger_skips_without_failure_alert(store,monkeypatch,capsys):
+    # A recovery cron delayed past KST midnight must not send tomorrow's report hours early
+    # nor raise the "dispatch failed" alert.
+    now=datetime(2026,11,18,0,20,tzinfo=dispatch.KST)
+    monkeypatch.setattr(dispatch,'utcnow',lambda:now)
+    monkeypatch.setattr(dispatch,'Store',lambda:store)
+    monkeypatch.setattr(dispatch,'alert',lambda *a:pytest.fail('skip is not a failure'))
+    monkeypatch.setattr(dispatch,'run',lambda *a,**k:pytest.fail('must not run early'))
+    monkeypatch.setattr('sys.argv',['dispatch','--wait-for-schedule'])
+    dispatch.main()
+    assert 'skipped_too_early' in capsys.readouterr().out
+
+
+def test_external_scheduler_origin_shares_daily_receipt(store,monkeypatch):
+    now=datetime(2026,11,12,8,tzinfo=dispatch.KST);seen=[]
+    monkeypatch.setattr(dispatch,'utcnow',lambda:now)
+    monkeypatch.setattr(dispatch,'Store',lambda:store)
+    monkeypatch.setattr(dispatch,'run',lambda s,t,dry_run=False,origin=None:seen.append(origin) or {'status':'ok'})
+    monkeypatch.setenv('SPORTON_DISPATCH_ORIGIN','schedule')
+    monkeypatch.setattr('sys.argv',['dispatch'])
+    dispatch.main()
+    assert seen==['schedule']
+
+
 def test_missed_schedule_alert_is_once_per_day(store,monkeypatch):
     now=datetime(2026,11,12,8,tzinfo=dispatch.KST);calls=[]
     monkeypatch.setattr(dispatch,'utcnow',lambda:now)
