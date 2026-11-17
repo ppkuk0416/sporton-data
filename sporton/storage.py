@@ -11,7 +11,7 @@ ENTITIES = '''sports leagues teams players seasons fixtures lineups injuries tea
 player_statistics historical_game_results historical_market_odds market_snapshots feature_snapshots
 model_versions model_predictions analyst_reports critical_reviews official_recommendations
 actual_results prediction_evaluations error_memory training_runs model_promotions
-raw_data source_failures review_evidence briefings briefing_notes briefing_events data_sources source_collections archive_datasets record_revisions validation_events source_observations identity_aliases professional_reports market_selections forecast_components settlement_events backup_runs restore_tests lake_exports access_events schema_versions job_executions data_quality_logs learning_feedback'''.split()
+raw_data source_failures review_evidence briefings briefing_notes briefing_events data_sources source_collections archive_datasets record_revisions validation_events source_observations identity_aliases professional_reports market_selections forecast_components settlement_events backup_runs restore_tests lake_exports access_events schema_versions job_executions data_quality_logs learning_feedback raw_bodies'''.split()
 
 
 def canonical(payload):
@@ -113,9 +113,30 @@ class Store:
         return out
 
 
+    def append_source(self,payload,key=None,idempotent=False):
+        """Store a raw source observation with its body content-addressed in raw_bodies.
+
+        Identical response bodies (finished-game summaries, unchanged schedules) are kept once;
+        every observation still gets its own raw_data row with URL, collection time and body hash.
+        """
+        if 'body' not in payload:return self.append('raw_data',key or digest(payload),payload,idempotent=idempotent)
+        body=payload['body'];body_sha=digest(body)
+        slim={k:v for k,v in payload.items() if k!='body'}
+        slim.update(body_sha256=body_sha,body_storage='raw_bodies')
+        with self.engine.begin() as conn:
+            self.append('raw_bodies',body_sha,{'body':body},idempotent=True,conn=conn)
+            return self.append('raw_data',key or digest(slim),slim,idempotent=idempotent,conn=conn)
+
+    def hydrate(self,payload,conn=None):
+        """Return a raw_data payload with its body, whether stored inline (legacy) or by hash."""
+        if 'body' in payload or payload.get('body_storage')!='raw_bodies':return payload
+        stored=self.get('raw_bodies',payload['body_sha256'],conn=conn)
+        if stored is None or digest(stored['body'])!=payload['body_sha256']:raise ValueError('raw body missing or hash mismatch')
+        return {**payload,'body':stored['body']}
+
     def latest_source(self,url):
         """Find one source snapshot without decoding the entire historical archive."""
         expression="json_extract(payload, '$.source_url')" if self.engine.dialect.name=='sqlite' else "CAST(payload AS jsonb)->>'source_url'"
         with self.engine.connect() as conn:
             row=conn.execute(text('SELECT id FROM raw_data WHERE '+expression+'=:url ORDER BY created_at DESC,id DESC LIMIT 1'),{'url':url}).first()
-            return {'id':row[0],'payload':self.get('raw_data',row[0],conn=conn)} if row else None
+            return {'id':row[0],'payload':self.hydrate(self.get('raw_data',row[0],conn=conn),conn=conn)} if row else None

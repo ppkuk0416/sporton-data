@@ -93,6 +93,20 @@ jobs:
           else
             python -m sporton.dispatch
           fi
+      - name: Report database size by table
+        if: always() && steps.restore.outcome == 'success'
+        run: |
+          python - <<'PY' || true
+          import os, sqlite3
+          path = 'var/dispatch/sporton.db'
+          if os.path.exists(path):
+              c = sqlite3.connect(path)
+              tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+              sizes = sorted(((t, *c.execute(f'SELECT count(*), coalesce(sum(length(payload)),0) FROM "{t}"').fetchone()) for t in tables
+                              if 'payload' in [x[1] for x in c.execute(f'PRAGMA table_info("{t}")')]), key=lambda x: -x[2])
+              print(f'DB file {os.path.getsize(path)/1e6:.1f} MB')
+              for t, n, b in sizes[:8]: print(f'{t:24} {n:7} rows {b/1e6:8.1f} MB')
+          PY
       - name: Preserve raw evidence, original reports and delivery receipts
         # Never publish a partially restored DB: it would become the "latest" state.
         if: always() && steps.restore.outcome == 'success'
